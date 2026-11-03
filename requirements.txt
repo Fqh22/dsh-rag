@@ -1,0 +1,6 @@
+# dsh-rag 运行时依赖
+# 向量化默认走智谱 embedding-3（HTTP API），不需要本地模型，也没有 GPU / ONNX 依赖。
+# 想完全离线：设 DSH_RAG_EMBED=local，取消下面 fastembed 的注释，然后重建向量。
+numpy>=1.26
+zstandard>=0.22
+# fastembed>=0.9      # 仅 DSH_RAG_EMBED=local 时需要（约 91MB 模型 + onnxruntime）

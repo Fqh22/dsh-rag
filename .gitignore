@@ -1,0 +1,21 @@
+# 本地环境
+.venv/
+__pycache__/
+*.py[cod]
+
+# 本地数据：记忆库是隐私，绝不进版本库
+data/*
+!data/.gitkeep
+logs/*
+!logs/.gitkeep
+*.db
+*.db-wal
+*.db-shm
+*.zhipu_key
+交接卡.md
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
