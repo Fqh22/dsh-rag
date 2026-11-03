@@ -36,6 +36,10 @@ DB_PATH = __import__("pathlib").Path(
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 _SEG = re.compile(r"[\u4e00-\u9fff]+|[A-Za-z0-9_./\\:@-]+")
 
+# 日志型记忆：又长、又什么都沾一点，RRF 下容易挤掉精炼的决策/事实。
+# 值 = (权重, 单次最多占几条)。见 Store._rerank。
+LOG_KINDS = {"changelog": (0.78, 2), "session": (0.88, 2)}
+
 # 进 pack 的「长期事实」类型；handoff/checkpoint/session 由各自通道处理
 FACT_KINDS = ("decision", "pitfall", "fact", "todo")
 
@@ -730,8 +734,11 @@ class Store:
     ) -> list[Memory]:
         """混合检索：关键词 + 向量，RRF 融合，项目隔离。"""
         limit = max(1, min(int(limit), 50))
-        kw = self._keyword_search(query, limit)
-        vec = self._vector_search(query, limit)
+        # 候选池要比 limit 大：重排会按类型限流，池子太小就没得挑，
+        # 结果还是被日志型记忆填满（实测 limit=8 时池子只有 16 条。
+        pool = max(limit * 3, 24)
+        kw = self._keyword_search(query, pool)
+        vec = self._vector_search(query, pool)
 
         RRF_K = 60
         fused: dict[int, float] = {}
@@ -760,13 +767,53 @@ class Store:
             rows = self._conn.execute(sql, params).fetchall()
 
         out = [Memory.from_row(r, score=fused.get(int(r["id"]), 0.0)) for r in rows]
-        out.sort(key=lambda m: m.score, reverse=True)
-        out = out[:limit]
+        out = self._rerank(out, limit, diversify=not kinds)
         # 使用计数：只统计「真的返回给调用方」的那些。清理策略靠它区分
         # 「写了但从来没人用」和「一直在用」——这两个的保留价值完全不同。
         if out:
             self._touch_usage([m.id for m in out])
         return out
+
+    def _rerank(self, items: list[Memory], limit: int,
+                diversify: bool = True) -> list[Memory]:
+        """对 RRF 结果再排一次：给日志型记忆降权，并限制它们在结果里的占比。
+
+        为什么需要：变更有 39 条、每条 400 字，又是「什么都沾一点」的叙事，
+        在 RRF 下会同时命中关键词和向量，把精炼的决策/事实挤出前几名。
+        实测 5 个典型查询，8 条里有 5–7 条是 changelog —— 真正的结论反而排后面。
+
+        规则：
+        - 权重：changelog 0.78、session 0.88（乘在 RRF 分数上，不改变相对次序之外的东西）；
+        - 单类上限：两者各自最多占 `limit // 3` 条（至少 1 条），其余留给别的类型；
+        - 调用方显式传了 `kinds` 就不介入——那时是精确查询，别再自作主张。
+        """
+        for m in items:
+            rule = LOG_KINDS.get(m.kind)
+            if rule:
+                m.score *= rule[0]
+        items.sort(key=lambda m: m.score, reverse=True)
+        if not diversify or len(items) <= limit:
+            return items[:limit]
+
+        picked: list[Memory] = []
+        overflow: list[Memory] = []
+        seen: dict[str, int] = {}
+        for m in items:
+            rule = LOG_KINDS.get(m.kind)
+            if rule:
+                cap = max(1, min(rule[1], limit // 3))
+                if seen.get(m.kind, 0) >= cap:
+                    overflow.append(m)
+                    continue
+            seen[m.kind] = seen.get(m.kind, 0) + 1
+            picked.append(m)
+            if len(picked) >= limit:
+                break
+        for m in overflow:              # 别的类型不够填时，再用它们补位
+            if len(picked) >= limit:
+                break
+            picked.append(m)
+        return picked[:limit]
 
     def _touch_usage(self, ids: list[int]) -> None:
         """累加检索命中次数。失败不影响检索结果，所以整段吞掉异常。"""

@@ -1,4 +1,4 @@
-# 安装/卸载 DSH-RAG 归档守护的登录自启项（不创建计划任务）
+﻿# 安装/卸载 DSH-RAG 归档守护的登录自启项（不创建计划任务）
 # 用法:
 #   powershell -ExecutionPolicy Bypass -File install-autostart.ps1
 #   powershell -ExecutionPolicy Bypass -File install-autostart.ps1 -Uninstall

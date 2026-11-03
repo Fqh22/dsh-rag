@@ -38,3 +38,30 @@ print("   created =", created, "id =", mid)
 
 print("\n-- 统计 --")
 print("  ", s.stats())
+
+# ---- 重排：日志型记忆（changelog/session）不能挤满结果 ----
+print("\n-- 重排：changelog 占比受限 --")
+rt = os.path.join(tempfile.gettempdir(), "dshrag_rerank.db")
+for suf in ("", "-wal", "-shm"):
+    try:
+        os.remove(rt + suf)
+    except OSError:
+        pass
+s2 = Store(rt)
+for i in range(12):
+    s2.remember("p", "changelog", f"99 · 变更 {i}",
+                f"变更记录第 {i} 条：输入防抖和知识库索引的改动，含实测数据与回滚方式。")
+for i in range(6):
+    s2.remember("p", "decision", f"决策 {i}",
+                f"决策第 {i} 条：输入防抖改成语义队列，因为合并零命中、每条多等 1 秒。")
+res = s2.recall("输入防抖 知识库索引", project="p", limit=8)
+kinds = [m.kind for m in res]
+print("   ", kinds)
+assert kinds.count("changelog") <= 2, f"changelog 超限: {kinds}"
+assert "decision" in kinds, f"决策被挤没了: {kinds}"
+
+# 显式指定 kinds 时不做重排干预（那是精确查询）
+only = s2.recall("输入防抖 知识库索引", project="p", limit=5, kinds=["changelog"])
+print("   指定 kinds ->", len(only), "条")
+assert len(only) == 5 and all(m.kind == "changelog" for m in only), only
+print("   OK")

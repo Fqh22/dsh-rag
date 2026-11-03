@@ -379,7 +379,7 @@ Host 侧只用 `execFile` 调 `src/cli.py`，不在 Node 里读 SQLite——Elec
 | `checkpoint_put(project, baseline?, goal?, done?, doing?, next?, files?, open_questions?)` | 写结构化状态，自动重渲染交接卡 |
 | `checkpoint_get(project)` | 读结构化字段（含归档生成的**待确认草稿**） |
 | `checkpoint_promote(project)` | 把草稿并入生效状态 |
-| `recall(query, project?, limit?, kinds?)` | 混合检索（关键词 + 向量，RRF 融合） |
+| `recall(query, project?, limit?, kinds?)` | 混合检索（关键词 + 向量，RRF 融合），带**类型重排** |
 | `remember(project, kind, title, content)` | 写入一条记忆，内容重复自动去重 |
 | `memory_update(id, title?, content?)` | **改**一条已有记忆（纠错，不留矛盾记录） |
 | `memory_recent(project?, limit?)` | 看最近写入 |
@@ -459,6 +459,27 @@ powershell -ExecutionPolicy Bypass -File "<repo>\scripts\install-autostart.ps1"
 
 `use_count` 是 v0.6 加的：每次 `recall` 真的把某条返回给调用方就 +1。
 它能区分"写了没人用"和"一直在用"，但**不足以单独构成删除理由**——所以只做提醒。
+
+### 召回为什么要重排
+
+`changelog` 和 `session` 是**日志型**记忆：又长（400 字起）、又什么都沾一点，
+在 RRF 下会同时命中关键词和向量，把精炼的 `decision` / `pitfall` 挤出前几名。
+
+实测（灌入 39 条 changelog 之后，8 条结果）：5 个典型查询里有 4 个是 **5–7 条 changelog**，
+真正的结论排在后面。
+
+`Store._rerank` 的规则：
+
+| 类型 | 分数权重 | 单次最多占 |
+|---|---|---|
+| `changelog` | ×0.78 | `limit // 3` 条（至少 1） |
+| `session` | ×0.88 | `limit // 3` 条（至少 1） |
+| 其它 | ×1.0 | 不限 |
+
+候选池同时从 `limit` 提到 `max(limit*3, 24)`——池子太小就没得挑，限流等于没做。
+调用方显式传 `kinds` 时不重排（那是精确查询，别再自作主张）。
+
+效果：同一组查询，changelog 从 5–7 条降到 2 条，`decision`/`pitfall` 回到前排。
 
 ### 怎么执行
 
