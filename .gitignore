@@ -19,3 +19,6 @@ logs/*
 .idea/
 .DS_Store
 Thumbs.db
+
+# 变更记录灌入的本机状态（记录已灌到哪几条，换机器后重建）
+scripts/.ingest_state.json

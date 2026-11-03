@@ -52,6 +52,7 @@ dsh-rag/
 │  ├─ install-autostart.ps1  # 装/卸登录自启（vbs，不用计划任务）
 │  ├─ reembed.py             # 换 embedding 后端后重建全部向量
 │  ├─ backfill_vectors.py    # 只补缺向量的记忆（日常运维用，不重建全部）
+│  ├─ ingest_changelog.py    # 把某个项目的「变更记录」增量灌成 changelog 记忆
 │  ├─ dsh-rag-archive.vbs
 │  └─ selftest_*.py / selftest_plugin.mjs
 ├─ data/
@@ -207,6 +208,29 @@ python -m venv .venv
 > 只是「有些记忆没向量」（服务在跑旧代码、写库时抛过异常）时，别全量重建，用
 > `.venv\Scripts\python.exe scripts\backfill_vectors.py`：只补缺的，省 API 调用。
 > 看缺多少：`memory_stats` 里的「缺向量」，或 `store.stats(MODEL_NAME)`。
+
+### 把项目的变更记录灌进记忆库
+
+有些项目把「为什么这么改」写在 `docs/99-变更记录.md`：跟着代码走、适合顺序读，
+但只能 grep。记忆库能语义检索，却要人手抄一遍结论——两边各写一次必然漂移。
+`scripts/ingest_changelog.py` 把这件事自动化（**不调模型，纯规则，可重复跑**）：
+
+```bat
+.venv\Scripts\python.exe scripts\ingest_changelog.py --dry-run   :: 先看会灌哪些
+.venv\Scripts\python.exe scripts\ingest_changelog.py             :: 增量灌
+.venv\Scripts\python.exe scripts\ingest_changelog.py --limit 5   :: 只灌最近 5 条
+.venv\Scripts\python.exe scripts\ingest_changelog.py --all       :: 连纯过程条目也灌
+```
+
+规则：
+
+- 只灌**带结论/教训**的条目（含 教训/结论/踩/值得/别再/回滚/代价/风险 之一）；
+  纯过程记录（改了几个文件、跑了几次测试）跳过——灌多了会把真正的决策淹掉。
+- 每条存成 `kind=changelog`，标题 `99 · {原标题}`，正文取开头 400 字**原样**（不改写），
+  末尾带 `[出处] docs/99-变更记录.md · {日期}`。
+- 增量靠 `scripts/.ingest_state.json`（本机状态，不入库）+ 记忆库自身的 content_hash 去重。
+- 试过两种"智能压缩"（按关键词抽结论行、首段+教训小节），抽出来的都是半句话，
+  不如原样截取 + 靠标题命中。
 >
 > **并发写的一个坑**：SQLite 默认 `busy_timeout=0`，多个进程（MCP 服务、归档守护、运维脚本）
 > 同时写时后到的会直接报 `database is locked`。更隐蔽的是写失败后没有 `rollback`：
