@@ -52,7 +52,7 @@ dsh-rag/
 │  ├─ install-autostart.ps1  # 装/卸登录自启（vbs，不用计划任务）
 │  ├─ reembed.py             # 换 embedding 后端后重建全部向量
 │  ├─ backfill_vectors.py    # 只补缺向量的记忆（日常运维用，不重建全部）
-│  ├─ ingest_changelog.py    # 把某个项目的「变更记录」增量灌成 changelog 记忆
+│  ├─ ingest_changelog.py    # 兼容入口（实际逻辑在 src/changelog.py）
 │  ├─ dsh-rag-archive.vbs
 │  └─ selftest_*.py / selftest_plugin.mjs
 ├─ data/
@@ -211,26 +211,28 @@ python -m venv .venv
 
 ### 把项目的变更记录灌进记忆库
 
-有些项目把「为什么这么改」写在 `docs/99-变更记录.md`：跟着代码走、适合顺序读，
-但只能 grep。记忆库能语义检索，却要人手抄一遍结论——两边各写一次必然漂移。
-`scripts/ingest_changelog.py` 把这件事自动化（**不调模型，纯规则，可重复跑**）：
+有些项目把「为什么这么改」写在变更记录里（`docs/99-*.md`、`CHANGELOG.md`、
+`docs/CHANGELOG.md`、`变更记录.md` 都认）：跟着代码走、适合顺序读，但只能 grep。
+记忆库能语义检索，却要人手抄一遍结论——两边各写一次必然漂移。
+所以它是**库的一环**，不是某个项目的脚本：
 
 ```bat
-.venv\Scripts\python.exe scripts\ingest_changelog.py --dry-run   :: 先看会灌哪些
-.venv\Scripts\python.exe scripts\ingest_changelog.py             :: 增量灌
-.venv\Scripts\python.exe scripts\ingest_changelog.py --limit 5   :: 只灌最近 5 条
-.venv\Scripts\python.exe scripts\ingest_changelog.py --all       :: 连纯过程条目也灌
+.venv\Scripts\python.exe src\cli.py ingest --dry-run      :: 先看会灌哪些
+.venv\Scripts\python.exe src\cli.py ingest                :: 所有项目，增量
+.venv\Scripts\python.exe src\cli.py ingest --project qq-cloud-bot
+.venv\Scripts\python.exe src\cli.py ingest --file 路径\CHANGELOG.md
 ```
 
-规则：
-
-- 只灌**带结论/教训**的条目（含 教训/结论/踩/值得/别再/回滚/代价/风险 之一）；
+- **自动跑**：归档守护（`watch_archive.py`）每天检查一次，新条目自动入库，
+  单项目单次上限 10 条，防止某个项目一次灌几百条把记忆库冲掉。
+- **只灌带结论的**：正文含 教训/结论/踩/值得/别再/回滚/代价/风险 之一才收；
   纯过程记录（改了几个文件、跑了几次测试）跳过——灌多了会把真正的决策淹掉。
-- 每条存成 `kind=changelog`，标题 `99 · {原标题}`，正文取开头 400 字**原样**（不改写），
-  末尾带 `[出处] docs/99-变更记录.md · {日期}`。
-- 增量靠 `scripts/.ingest_state.json`（本机状态，不入库）+ 记忆库自身的 content_hash 去重。
-- 试过两种"智能压缩"（按关键词抽结论行、首段+教训小节），抽出来的都是半句话，
-  不如原样截取 + 靠标题命中。
+  想全都灌用 `--all-entries`。
+- **存储**：`kind=changelog`，标题 `99 · {原标题}`，正文取开头 400 字**原样**，
+  末尾带 `[出处]`。试过两种"智能压缩"（按关键词抽结论行、首段+教训小节），
+  抽出来都是半句话，不如原样截取 + 靠标题命中。
+- **幂等**：`data/changelog_state.json` 记已灌条目，记忆库自身还有 content_hash 去重；
+  重复跑新增为 0。
 >
 > **并发写的一个坑**：SQLite 默认 `busy_timeout=0`，多个进程（MCP 服务、归档守护、运维脚本）
 > 同时写时后到的会直接报 `database is locked`。更隐蔽的是写失败后没有 `rollback`：

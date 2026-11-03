@@ -126,6 +126,15 @@ def main() -> int:
     p_hk.add_argument("--text", default="")
     p_hk.add_argument("--cwd", default="")
 
+    # 变更记录 → 记忆（增量、不调模型）
+    p_ing = sub.add_parser("ingest")
+    p_ing.add_argument("--project", default="")
+    p_ing.add_argument("--file", default="")
+    p_ing.add_argument("--root", default="")
+    p_ing.add_argument("--limit", type=int, default=0)
+    p_ing.add_argument("--all-entries", action="store_true")
+    p_ing.add_argument("--dry-run", action="store_true")
+
     args = ap.parse_args()
     s = Store()
 
@@ -144,6 +153,26 @@ def main() -> int:
 
     elif args.cmd == "projects":
         emit({"ok": True, "projects": s.projects()})
+
+    elif args.cmd == "ingest":
+        import changelog as cl
+
+        root = Path(args.root) if args.root else None
+        kw = dict(dry_run=args.dry_run, limit=args.limit,
+                  all_entries=args.all_entries)
+        if args.file:
+            p = Path(args.file)
+            proj = args.project or p.parent.name
+            res = [{"project": proj, **cl.ingest(s, proj, p, **kw)}]
+        elif args.project:
+            p = cl.project_file(args.project, root)
+            if not p:
+                emit({"ok": False, "error": f"{args.project} 没有变更记录文件"})
+                return 1
+            res = [{"project": args.project, **cl.ingest(s, args.project, p, **kw)}]
+        else:
+            res = cl.ingest_all(s, root=root, **kw)
+        emit({"ok": True, "result": res})
 
     elif args.cmd == "overview":
         emit({"ok": True, "projects": s.overview()})

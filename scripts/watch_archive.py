@@ -25,6 +25,7 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 STATE = ROOT / "data" / "watch-state.json"
+INGEST_DAY = ROOT / "data" / "ingest-day.json"
 LOG = ROOT / "logs" / "archive.log"
 INTERVAL = int(os.environ.get("DSH_RAG_SCAN_SECONDS") or 300)
 
@@ -58,6 +59,32 @@ def scan_once() -> str:
     return archive.run(store=s, limit=10, min_mtime=cutoff)
 
 
+def maybe_ingest() -> str | None:
+    """每天一次：把各项目的变更记录增量灌进记忆库（不调模型，只补新的）。
+
+    放在守护进程里而不是让人手动跑——手动步骤迟早会忘，忘了记忆库就落后于代码。
+    单项目单次上限 10 条，避免某个项目一次灌几百条把记忆库冲掉。
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        st = json.loads(INGEST_DAY.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        st = {}
+    if st.get("day") == today:
+        return None
+    import changelog as cl
+    from store import Store
+
+    s = Store()
+    cooked = []
+    for r in cl.ingest_all(s, limit=10):
+        if r.get("added"):
+            cooked.append(f"{r['project']}+{r['added']}")
+    INGEST_DAY.parent.mkdir(parents=True, exist_ok=True)
+    INGEST_DAY.write_text(json.dumps({"day": today}), encoding="utf-8")
+    return ("变更记录灌入: " + ", ".join(cooked)) if cooked else None
+
+
 def main() -> None:
     log(f"watcher start, interval={INTERVAL}s, root={ROOT}")
     while True:
@@ -67,6 +94,12 @@ def main() -> None:
                 log(msg)
         except Exception:  # noqa: BLE001
             log("ERROR " + traceback.format_exc().replace("\n", " | "))
+        try:
+            msg = maybe_ingest()
+            if msg:
+                log(msg)
+        except Exception:  # noqa: BLE001
+            log("INGEST ERROR " + traceback.format_exc().replace("\n", " | "))
         time.sleep(INTERVAL)
 
 
