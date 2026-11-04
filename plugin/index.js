@@ -212,12 +212,21 @@ function attachAutoInject(ctx, runCli) {
         if (!text || text.length < 4) return
         tries.add(sid)
 
-        const agent = agents.get(String(sid))
-        if (!agent || typeof agent.inject !== 'function') return
+        // 优先从会话对象上直接拿 agent：`agent/created` 触发时 agent 未必已经挂上 session，
+        // 靠那张 map 查会一直是空的（第一版就是这么静默失败的）。
+        const agent = (session && session.agent) || agents.get(String(sid))
+        if (!agent || typeof agent.inject !== 'function') {
+          log(`skip sid=${sid}: agent 不可用（session.agent=${Boolean(session && session.agent)}）`)
+          return
+        }
+        agents.set(String(sid), agent)
 
         runCli(['hook', '--text', text.slice(0, 500), '--cwd', String(session.cwd || '')])
           .then((r) => {
-            if (!r || !r.matched) return false
+            if (!r || !r.matched) {
+              log(`hook unmatched sid=${sid}`)
+              return false
+            }
             agent.inject({
               role: 'user',
               content: [{ type: 'text', text: build(r) }],
