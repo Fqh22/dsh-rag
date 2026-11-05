@@ -91,11 +91,35 @@ _PROJECTS_CACHE: list[str] | None = None
 
 
 def _decode_zstd(path: Path) -> str:
-    import zstandard
+    """解压会话日志。优先 zstandard 模块，没有就退到 zstd 命令行。
 
-    dctx = zstandard.ZstdDecompressor()
-    with open(path, "rb") as f:
-        return dctx.stream_reader(f).read().decode("utf-8", "replace")
+    为什么要有退路：**缺依赖的表现和「日志格式变了」一模一样**——
+    都是解析出 0 条。曾经因此在体检里报了一次「数据损坏」，
+    实际只是用错了 Python（没装 zstandard 的那个）。
+    所以这里宁可多两步，也要把「缺工具」和「格式不对」分开报。
+    """
+    try:
+        import zstandard
+
+        dctx = zstandard.ZstdDecompressor()
+        with open(path, "rb") as f:
+            return dctx.stream_reader(f).read().decode("utf-8", "replace")
+    except ImportError:
+        pass
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"zstd 解压失败：{exc}") from exc
+
+    import shutil
+    import subprocess
+
+    exe = shutil.which("zstd")
+    if not exe:
+        raise RuntimeError(
+            "缺少 zstandard：`pip install zstandard`，或用项目 .venv 里的 python 跑")
+    out = subprocess.run([exe, "-dc", str(path)], capture_output=True, check=False)
+    if out.returncode != 0:
+        raise RuntimeError(f"zstd 命令行解压失败：{out.stderr[:120]!r}")
+    return out.stdout.decode("utf-8", "replace")
 
 
 def _clean(text: str) -> str:

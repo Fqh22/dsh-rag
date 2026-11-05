@@ -100,42 +100,59 @@ def run(store, session_probe: int = 6, verbose: bool = False) -> dict[str, Any]:
 
     # ---------------------------------------------------------------- 会话日志格式
     # 这是最容易被 DSH 升级悄悄打断的一环：格式变了，归档会「成功但抽不到东西」。
+    # 注意：**缺 zstandard 和格式变化的表现一样**（都是解析 0 条），
+    # 所以先单独查依赖，别把「用错 Python」误报成「数据坏了」。
     try:
         import archive
 
-        files = sorted(
-            SESSIONS_ROOT.glob("*/*/session.v4.jsonl.zstd"),
-            key=lambda p: p.stat().st_mtime, reverse=True,
-        )[:session_probe]
-        parsed = 0
-        failed: list[str] = []
-        kinds: set[str] = set()
-        metrics_ok = 0
-        for f in files:
-            try:
-                sess = archive.parse_session(f)
-            except Exception:  # noqa: BLE001
-                sess = None
-            if not sess:
-                failed.append(f.parent.name[:12])
-                continue
-            parsed += 1
-            kinds.update((sess.get("ignored") or {}).keys())
-            if sess.get("metrics", {}).get("toolCalls") is not None:
-                metrics_ok += 1
-        level = "ok" if parsed == len(files) and files else ("warn" if parsed else "error")
-        if not files:
-            level, detail = "warn", "没有找到会话日志（DSH 目录结构变了？）"
-        else:
-            detail = f"最近 {len(files)} 个会话解析成功 {parsed} 个"
-            if failed:
-                detail += f"，失败 {', '.join(failed[:3])}"
-            if kinds:
-                detail += f"（识别到的注入类型 {len(kinds)} 种）"
-        checks.append(_check("会话日志格式", level, detail))
+        try:
+            import zstandard  # noqa: F401
 
-        if files and parsed and metrics_ok == 0:
-            checks.append(_check("接力度量", "warn", "会话里没有 tool/call 事件，指标会是空的"))
+            has_zstd = True
+        except Exception:  # noqa: BLE001
+            has_zstd = bool(__import__("shutil").which("zstd"))
+        if not has_zstd:
+            checks.append(_check(
+                "会话日志格式", "warn",
+                "缺 zstandard（pip install zstandard，或用项目 .venv 的 python）——本次跳过"))
+        else:
+            files = sorted(
+                SESSIONS_ROOT.glob("*/*/session.v4.jsonl.zstd"),
+                key=lambda p: p.stat().st_mtime, reverse=True,
+            )[:session_probe]
+            parsed = 0
+            failed: list[str] = []
+            kinds: set[str] = set()
+            metrics_ok = 0
+            errs: list[str] = []
+            for f in files:
+                try:
+                    sess = archive.parse_session(f)
+                except Exception as exc:  # noqa: BLE001
+                    sess = None
+                    errs.append(f"{type(exc).__name__}: {exc}")
+                if not sess:
+                    failed.append(f.parent.name[:12])
+                    continue
+                parsed += 1
+                kinds.update((sess.get("ignored") or {}).keys())
+                if sess.get("metrics", {}).get("toolCalls") is not None:
+                    metrics_ok += 1
+            level = "ok" if parsed == len(files) and files else ("warn" if parsed else "error")
+            if not files:
+                level, detail = "warn", "没有找到会话日志（DSH 目录结构变了？）"
+            else:
+                detail = f"最近 {len(files)} 个会话解析成功 {parsed} 个"
+                if failed:
+                    detail += f"，失败 {', '.join(failed[:3])}"
+                    if errs:
+                        detail += f"（{errs[0][:80]}）"
+                if kinds:
+                    detail += f"（识别到的注入类型 {len(kinds)} 种）"
+            checks.append(_check("会话日志格式", level, detail))
+
+            if files and parsed and metrics_ok == 0:
+                checks.append(_check("接力度量", "warn", "会话里没有 tool/call 事件，指标会是空的"))
     except Exception as exc:  # noqa: BLE001
         checks.append(_check("会话日志格式", "warn", f"检查失败：{type(exc).__name__}: {exc}"))
 

@@ -553,6 +553,9 @@ python src/cli.py cleanup --purge         # 硬删 archived 超过 180 天的（
 node scripts\selftest_plugin.mjs
 
 # 结构与缓存
+# 注意：一定要用 .venv 里的 python。用别的解释器（比如 DSH 自带那个）跑时，
+# 缺 zstandard 会让会话日志解析出 0 条——看起来像数据坏了，其实只是缺依赖。
+# 现在的 doctor 会把这句单独报成 warn，不再算错误。
 .venv\Scripts\python.exe src\cli.py doctor           # 体检（升级 DSH 后必跑）
 .venv\Scripts\python.exe src\cli.py schema           # 版本、各表条数、是否有 _v4_* 备份表
 .venv\Scripts\python.exe src\cli.py cache --limit 20 # 命中率、压缩代价
