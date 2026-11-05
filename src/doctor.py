@@ -158,7 +158,12 @@ def run(store, session_probe: int = 6, verbose: bool = False) -> dict[str, Any]:
 
     # ---------------------------------------------------------------- 内容健康度
     ov = store.overview()
-    orphans = [p for p in ov if p["project"] not in ("工作区", "未归类") and not p["hasDir"]]
+    # 已归档的项目没有目录是正常的（比如 agentd 并进了 qq-cloud-bot），不算孤儿
+    archived = {r[0] for r in conn.execute(
+        "SELECT name FROM projects WHERE archived_at IS NOT NULL")}
+    orphans = [p for p in ov
+               if p["project"] not in ("工作区", "未归类")
+               and p["project"] not in archived and not p["hasDir"]]
     checks.append(_check(
         "孤儿项目", "warn" if orphans else "ok",
         "、".join(p["project"] for p in orphans) if orphans else "无",
@@ -167,7 +172,7 @@ def run(store, session_probe: int = 6, verbose: bool = False) -> dict[str, Any]:
     no_cp = [
         p for p in ov
         if p["hasDir"] and p["total"] > 0 and p["kinds"].get("checkpoint", 0) == 0
-        and p["project"] not in ("工作区", "未归类")
+        and p["project"] not in ("工作区", "未归类") and p["project"] not in archived
     ]
     checks.append(_check(
         "结构化状态覆盖", "warn" if no_cp else "ok",
