@@ -152,6 +152,13 @@ class Store:
         # 时后到的写入直接报 database is locked，不是数据问题，等一会儿就过去了。
         self._conn.execute("PRAGMA busy_timeout=5000")
         self.migration = schema.ensure(self._conn)
+        # 页面层（长文档的目录 + 块）建表是纯增量，不碰 memories
+        try:
+            import pages as pages_mod
+
+            pages_mod.ensure_tables(self._conn)
+        except Exception as e:  # noqa: BLE001
+            print(f"[store] pages 建表失败：{e}")
         self._vec_cache: tuple[str, np.ndarray, list[int]] | None = None
         if self.migration.get("migrated"):
             self.sync_projects()

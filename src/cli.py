@@ -68,6 +68,15 @@ def main() -> int:
     p_u.add_argument("--title", default=None)
     p_u.add_argument("--content", default=None)
 
+    # ---- 页面层（长文档：目录 + 块） ----
+    p_pg = sub.add_parser("pages", help="长文档页面层：index/list/search/stats")
+    p_pg.add_argument("--project", required=True)
+    p_pg.add_argument("--dir", default=None, help="要灌的目录（index 时用）")
+    p_pg.add_argument("--pattern", default="*.md")
+    p_pg.add_argument("--query", default=None)
+    p_pg.add_argument("--limit", type=int, default=20)
+    p_pg.add_argument("--reindex", action="store_true", help="强制重算（忽略 sha）")
+
     p_g = sub.add_parser("get")
     p_g.add_argument("--id", type=int, required=True)
 
@@ -335,6 +344,22 @@ def main() -> int:
             emit({"ok": True, "draft": None if not d else {
                 "id": d.id, "updated_at": d.updated_at, "meta": d.meta, "content": d.content,
             }})
+
+    elif args.cmd == "pages":
+        import pages as pages_mod
+
+        conn = s._conn
+        if args.dir:
+            res = pages_mod.ingest_dir(conn, __import__("pathlib").Path(args.dir),
+                                       args.project, pattern=args.pattern,
+                                       force=args.reindex)
+            emit({"ok": True, "indexed": res, "stats": pages_mod.stats(conn)})
+        elif args.query:
+            rows = pages_mod.search_chunks(conn, args.query, args.project, args.limit)
+            emit({"ok": True, "hits": rows})
+        else:
+            rows = pages_mod.index_list(conn, args.project, args.limit)
+            emit({"ok": True, "items": rows, "stats": pages_mod.stats(conn)})
 
     elif args.cmd == "hook":
         # 会话开场钩子：只回答「这句话像不像在说某个已登记的项目」，

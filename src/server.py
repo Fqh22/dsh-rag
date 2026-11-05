@@ -73,6 +73,36 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "pages_search",
+        "description": (
+            "在长文档（页面层）里做段落级检索。记忆库里的 recall 适合「事实/结论」，"
+            "要查文档里的具体段落、命令、步骤时用这个。"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "要查的内容，自然语言"},
+                "project": {"type": "string", "description": "限定项目；省略表示不限"},
+                "limit": {"type": "integer", "description": "返回几段，默认 3"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "pages_index",
+        "description": (
+            "长文档的目录：标题 + 摘要 + 是否过期。想知道某个项目有哪些文档、"
+            "每篇讲什么时用；比把全文读进来便宜得多。"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "限定项目；省略表示不限"},
+                "limit": {"type": "integer", "description": "最多几篇，默认 40"},
+            },
+        },
+    },
+    {
         "name": "remember",
         "description": (
             "把一条值得跨会话保留的信息写入项目记忆库。"
@@ -591,8 +621,41 @@ def tool_checkpoint_promote(args: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"已采纳草稿 #{draft.id}，生成 checkpoint #{mid}，交接卡已重渲染。")
 
 
+def tool_pages_search(args: dict[str, Any]) -> dict[str, Any]:
+    """长文档里的块级检索（页面层）。记忆库查不到细节时用它。"""
+    q = (args.get("query") or "").strip()
+    if not q:
+        return _err("query 不能为空")
+    import pages as pages_mod
+
+    conn = store._conn  # type: ignore[union-attr]
+    hits = pages_mod.search_chunks(conn, q, args.get("project") or None,
+                                   int(args.get("limit") or 3))
+    if not hits:
+        return _ok(f"页面层里没检索到与「{q}」相关的段落。")
+    lines = []
+    for h in hits:
+        flag = "（可能过时）" if h["stale"] else ""
+        lines.append(f"【{h['title']}{flag}】score={h['score']}\n{h['text']}")
+    return _ok("\n\n".join(lines))
+
+
+def tool_pages_index(args: dict[str, Any]) -> dict[str, Any]:
+    """长文档的目录：标题 + 摘要 + 是否过期。比全文便宜得多。"""
+    import pages as pages_mod
+
+    conn = store._conn  # type: ignore[union-attr]
+    rows = pages_mod.index_list(conn, args.get("project") or None,
+                                int(args.get("limit") or 40))
+    if not rows:
+        return _ok("页面层还是空的（用 `cli.py pages --dir <目录> --project <项目>` 灌）。")
+    return _ok(pages_mod.render_index(rows))
+
+
 HANDLERS = {
     "recall": tool_recall,
+    "pages_search": tool_pages_search,
+    "pages_index": tool_pages_index,
     "remember": tool_remember,
     "handoff_get": tool_handoff_get,
     "handoff_put": tool_handoff_put,
