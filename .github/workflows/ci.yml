@@ -36,8 +36,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # 插件的 /api/state 会 spawn `python3 src/cli.py`，所以这里也要有 Python 依赖
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install python deps
+        run: pip install -r requirements.txt
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+
       - name: plugin static selftest
         run: node scripts/selftest_plugin.mjs
