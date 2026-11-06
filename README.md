@@ -195,6 +195,7 @@ python -m venv .venv
 | `DSH_RAG_HANDOFFS_ROOT` | 没有项目目录时，交接卡 md 的导出位置 | `data/handoffs` |
 | `DSH_RAG_EMBED` | 向量后端：`zhipu` / `local` / `off` | `zhipu` |
 | `DSH_RAG_SCAN_SECONDS` | 归档守护的扫描间隔（秒） | `300` |
+| `DSH_RAG_PYTHON` | 面板调 CLI 时用的 Python 解释器 | 项目的 `.venv`，找不到就用 `python` |
 
 向量化默认走**智谱 embedding-3**（`https://open.bigmodel.cn/api/paas/v4/embeddings`，1024 维），
 不需要下载任何模型，纯 HTTP 调用，单条约 150–400 ms。

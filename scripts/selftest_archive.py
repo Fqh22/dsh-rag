@@ -18,6 +18,11 @@ print("\n== 向量检索: 浏览器插件 ==")
 for m in s.recall("浏览器插件相关的工作", limit=3):
     print(f"  {m.score:.4f} [{m.project}] {m.title}")
 print("\n== 一个会话摘要样例 ==")
-r = s.recent(limit=1)[0]
-print("  project:", r.project)
-print("  ", r.content[:600].replace("\n","\n  "))
+items = s.recent(limit=1)
+if not items:
+    # CI / 新机器上没有 ~/.dsh/sessions，归档 0 条是正常结果，不是失败
+    print("  （没有可归档的会话，跳过）")
+else:
+    r = items[0]
+    print("  project:", r.project)
+    print("  ", r.content[:600].replace("\n", "\n  "))

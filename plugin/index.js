@@ -16,7 +16,26 @@ export const name = 'dsh-rag-panel'
 
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(PLUGIN_DIR, '..')
-const PY = path.join(ROOT, '.venv', 'Scripts', 'python.exe')
+
+/**
+ * 用哪个 Python 跑 cli.py：优先环境变量，其次项目 .venv（Windows / POSIX 两种布局），
+ * 最后退回 PATH 里的 python。写死 `.venv\Scripts\python.exe` 时，
+ * 换台机器 / Linux / CI 上会直接 ENOENT（2026-11-06 CI 复现）。
+ */
+function resolvePython() {
+  if (process.env.DSH_RAG_PYTHON) return process.env.DSH_RAG_PYTHON
+  const candidates = process.platform === 'win32'
+    ? [path.join(ROOT, '.venv', 'Scripts', 'python.exe')]
+    : [path.join(ROOT, '.venv', 'bin', 'python3'), path.join(ROOT, '.venv', 'bin', 'python')]
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p
+    } catch (e) { /* ignore */ }
+  }
+  return process.platform === 'win32' ? 'python' : 'python3'
+}
+
+const PY = resolvePython()
 const CLI = path.join(ROOT, 'src', 'cli.py')
 const SRC = path.join(ROOT, 'src')
 const CLIENT_JS_PATH = path.join(PLUGIN_DIR, 'client.js')
