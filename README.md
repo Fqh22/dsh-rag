@@ -1,5 +1,8 @@
 # dsh-rag — DSH 跨会话项目记忆库
 
+[![ci](https://github.com/Fqh22/dsh-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/Fqh22/dsh-rag/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 给 DeepSeek Harness 加一层**按项目分类的长期记忆**：会话变长归档、新开会话时，
 不用再从头交接一遍。
 
