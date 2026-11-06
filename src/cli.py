@@ -234,24 +234,13 @@ def main() -> int:
             emit({"ok": False, "error": "需要 --confirm 才会真正删除", "project": norm})
             return 1
         n = s.delete_project(norm)
-        emit({"ok": True, "project": norm, "deleted": n})
+        # delete_project 内部会先拍一份整库快照；路径回显给调用方，方便回滚
+        emit({"ok": True, "project": norm, "deleted": n, "backup": s.last_backup})
 
     elif args.cmd == "update":
+        # 向量由 store.update_memory 内部重算（reembed=True）。
+        # 以前这里又手算一遍，等于每改一次内容付两次 embedding 的钱。
         ok, msg = s.update_memory(args.id, args.title, args.content)
-        if ok and msg == "已更新":
-            # 改完必须重算向量，否则语义检索还在用旧内容的向量
-            try:
-                import embed
-
-                m = s.get_memory(args.id)
-                if m:
-                    vecs = embed.embed([f"{m.title}\n{m.content}"])
-                    if vecs:
-                        s.add_vector(m.id, vecs[0], embed.MODEL_NAME)
-            except Exception as exc:  # noqa: BLE001
-                emit({"ok": True, "id": args.id, "message": msg,
-                      "warning": f"向量未更新: {exc}"})
-                return 0
         emit({"ok": ok, "id": args.id, "message": msg})
 
     elif args.cmd == "pack":
@@ -350,7 +339,7 @@ def main() -> int:
 
         conn = s._conn
         if args.dir:
-            res = pages_mod.ingest_dir(conn, __import__("pathlib").Path(args.dir),
+            res = pages_mod.ingest_dir(conn, Path(args.dir),
                                        args.project, pattern=args.pattern,
                                        force=args.reindex)
             emit({"ok": True, "indexed": res, "stats": pages_mod.stats(conn)})

@@ -368,7 +368,9 @@ def parse_session(path: Path) -> dict[str, Any] | None:
             if line_txt:
                 actions.append(line_txt)
 
-    if not users and not assistants and not compact_parts:
+    # 有 tool/call 也算有效会话：子代理常常只有工具动作、没有 user/assistant 文本，
+    # 以前会把它们整条丢掉（和文件头「记动作，不记噪声」的意图相反）。
+    if not users and not assistants and not compact_parts and not calls:
         return None
 
     sid = str(header.get("id") or path.parent.name)
@@ -506,10 +508,17 @@ def run(
     for _, f in candidates:
         if processed >= limit:
             break
+        # 先用目录名（= 会话 id）查台账，已归档的直接跳过，**不解压**。
+        # 会话文件动辄几 MB～几十 MB，watcher 每轮把全部已归档会话解压一遍
+        # 是纯浪费（2026-11-06 实测单会话峰值 205MB）。
+        guess_id = f.parent.name
+        if not force and store.session_done(guess_id):
+            skipped += 1
+            continue
         sess = parse_session(f)
         if not sess:
             continue
-        if not force and store.session_done(sess["session_id"]):
+        if not force and sess["session_id"] != guess_id and store.session_done(sess["session_id"]):
             skipped += 1
             continue
         project = _project_of(sess)
@@ -519,6 +528,9 @@ def run(
         processed += 1
         summary = summarize(sess)
         is_compact = bool(sess["compacts"])
+        if force:
+            # 显式重抽：旧摘要作废，否则同一会话会留两条 active（还各有各的向量）
+            store.supersede_session_memories(sess["session_id"])
         mid, created = store.remember(
             project=project,
             kind="session",
@@ -533,6 +545,7 @@ def run(
                 "compacts": len(sess["compacts"]),
                 "origin": sess["origin"],
             },
+            revive=force,
         )
         store.upsert_session(
             session_id=sess["session_id"],

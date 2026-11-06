@@ -3,9 +3,9 @@
 给 DeepSeek Harness 加一层**按项目分类的长期记忆**：会话变长归档、新开会话时，
 不用再从头交接一遍。
 
-形态：本地 MCP server（stdio）+ 会话归档守护。全部离线，无外部 API 依赖。
+形态：本地 MCP server（stdio）+ 会话归档守护。**数据全部留在本机**；只有向量化默认要联网（智谱 embedding），可切本地模型或完全关闭。
 
-当前版本 **v0.6**：归档自动起草状态、开场自动注入指针、接力度量、体检与清理。
+当前版本 **v0.7**：修掉「pack 丢当前状态」「baseline 改不动」「自测污染生产文件」三个硬伤，并补了迁移备份、单实例锁、以及一套更严的自测隔离。细节见 `docs/审查-2026-11-06.md`。
 
 ---
 
@@ -37,27 +37,31 @@ dsh-rag/
 ├─ src/
 │  ├─ server.py       # MCP stdio server（JSON-RPC 2.0，手写，无 SDK 依赖）
 │  ├─ store.py        # 领域层：写入 / 检索 / 会话台账 / 上下文包
-│  ├─ schema.py       # v6 表结构与增量迁移（唯一真相）
+│  ├─ schema.py       # v6 表结构与增量迁移（唯一真相，迁移前自动快照）
 │  ├─ card.py         # 交接卡渲染 + 上下文包分层（缓存前缀在这里定序）
 │  ├─ archive.py      # 会话 zstd JSONL → 摘要 / 接力度量 / 状态草稿
 │  ├─ insight.py      # 缓存命中率、压缩代价、接力效率（只读会话日志）
 │  ├─ doctor.py       # 体检：索引一致性 / 会话格式漂移 / 孤儿 / 草稿积压
 │  ├─ cleanup.py      # 信息生命周期：软归档过期低价值信息
 │  ├─ projects.py     # 项目实体：目录权威 + 归一 + 交接卡 md 导出
-│  ├─ embed.py        # 智谱 embedding-3 / 本地 fastembed
+│  ├─ paths.py        # 路径解析（PROJECTS / DATA / HANDOFFS 都可用环境变量改）
+│  ├─ embed.py        # 智谱 embedding-3 / 本地 fastembed / 关闭
 │  └─ cli.py          # 面板 Host 调用的 JSON CLI
 ├─ scripts/
-│  ├─ watch_archive.py       # 归档守护（常驻，每 5 分钟扫一次）
-│  ├─ backfill.py            # 手动回溯历史会话（默认 force）
+│  ├─ watch_archive.py       # 归档守护（常驻，每 5 分钟扫一次，单实例锁）
+│  ├─ backfill.py            # 手动回溯历史会话（默认只补漏，--force 才重抽）
 │  ├─ install-autostart.ps1  # 装/卸登录自启（vbs，不用计划任务）
 │  ├─ reembed.py             # 换 embedding 后端后重建全部向量
 │  ├─ backfill_vectors.py    # 只补缺向量的记忆（日常运维用，不重建全部）
+│  ├─ rebuild_fts.py         # 重建全文索引（doctor 报 FTS 不一致时用）
 │  ├─ ingest_changelog.py    # 兼容入口（实际逻辑在 src/changelog.py）
 │  ├─ dsh-rag-archive.vbs
 │  └─ selftest_*.py / selftest_plugin.mjs
+├─ docs/
+│  └─ 审查-2026-11-06.md     # 一次完整代码审视的记录（问题 + 修复 + 验证）
 ├─ data/
 │  ├─ memory.db       # 唯一的真相源，备份它就是备份全部记忆
-│  ├─ backup/         # 迁移前的整库快照（v4 备份在这里）
+│  ├─ backup/         # 迁移 / 清理 / 删项目前的整库快照
 │  ├─ models/         # ONNX 模型缓存（只有 local 后端用）
 │  └─ watch-state.json# 归档基线时间
 ├─ logs/archive.log · logs/mcp.log
@@ -181,12 +185,16 @@ python -m venv .venv
 
 > 国内网络建议用清华镜像；用官方源把 `-i` 去掉即可。
 
-**两个可选环境变量**：
+**环境变量**（都有合理默认值，通常只需要第一个）：
 
 | 变量 | 作用 | 默认 |
 |---|---|---|
 | `DSH_RAG_PROJECTS_ROOT` | 被记忆的项目放在哪个目录（一个子目录 = 一个项目） | `~/Documents/Projects` |
-| `DSH_RAG_DB` | 数据库路径 | `data/memory.db` |
+| `DSH_RAG_DATA` | 运行期数据目录（库、备份、状态文件） | `data/` |
+| `DSH_RAG_DB` | 数据库路径（覆盖 `DSH_RAG_DATA` 里的默认值） | `data/memory.db` |
+| `DSH_RAG_HANDOFFS_ROOT` | 没有项目目录时，交接卡 md 的导出位置 | `data/handoffs` |
+| `DSH_RAG_EMBED` | 向量后端：`zhipu` / `local` / `off` | `zhipu` |
+| `DSH_RAG_SCAN_SECONDS` | 归档守护的扫描间隔（秒） | `300` |
 
 向量化默认走**智谱 embedding-3**（`https://open.bigmodel.cn/api/paas/v4/embeddings`，1024 维），
 不需要下载任何模型，纯 HTTP 调用，单条约 150–400 ms。
@@ -207,6 +215,16 @@ python -m venv .venv
 | `zhipu`（默认） | embedding-3 | 1024 | 只需联网 + key |
 | `local` | bge-small-zh-v1.5 | 512 | 91MB ONNX 模型，纯 CPU |
 | `off` | — | — | 纯关键词检索，不联网 |
+
+### 数据与隐私
+
+- **记忆全在一个文件里**：`data/memory.db`（SQLite）。备份 = 拷这一个文件；迁移 = 换机器后放回原位。
+- **默认只有向量化会出网**：走智谱时，记忆的「标题 + 正文」会发给 `open.bigmodel.cn` 换向量。
+  介意就把 `DSH_RAG_EMBED` 设成 `local`（本地模型）或 `off`（纯关键词，完全不出网）。
+- **key 不进仓库**：依次读环境变量、Windows 注册表、`data/.zhipu_key`；后两者都在 `.gitignore` 里。
+- **仓库里没有你的数据**：`data/`、`logs/`、`交接卡.md` 全部被忽略；导出的交接卡带项目名和文件路径，
+  只适合放在你本机或私有仓库。
+- **归档读取的是本机会话日志**：`~/.dsh/sessions/**/session.v4.jsonl.zstd`，只读，不复制。
 
 > ⚠️ **换后端必须重建向量**：维度不同，新旧向量混在一起算余弦没有意义。
 > 跑 `.venv\Scripts\python.exe scripts\reembed.py`，它会重建并清掉其它模型的旧向量。
@@ -610,7 +628,8 @@ Copy-Item data\memory.db data\backup\memory-$(Get-Date -f yyyyMMdd-HHmm).db
 - **归档摘要不调 LLM（除非 DSH 压缩过）**：规则抽取语义压缩有限；有 `compact-checkpoint` 时直接用它，质量最好。
 - **项目归属是推断**：会话没提到项目名时会落到「工作区」。
 - **pack 的缓存收益有条件**：基线不变才能跨会话命中；交接卡每写一次，卡之后的内容就要重算。
-  事实超过 40 条时最老的会被挤出，前缀会变一次——这是有意的取舍（否则 pack 无限长）。
+  预算不够时按 `next → facts → card` 收缩：先丢「下一步」，再从**最旧**的事实开始挤，
+  「当前状态」最后才动；事实被裁剪时 header 会注明「更早的被省略，用 recall 查」。
 - **单机单用户**：SQLite WAL，没有并发写优化，不适合多进程高频写。
 - **向量化依赖网络**：智谱是 HTTP API，断网时向量检索降级为纯关键词（不报错，只是召回变差）。想彻底离线切 `DSH_RAG_EMBED=local`。
 - **文本会出本机**：走智谱意味着记忆正文会发给智谱。介意的话用 local 后端。
@@ -624,3 +643,41 @@ Copy-Item data\memory.db data\backup\memory-$(Get-Date -f yyyyMMdd-HHmm).db
 - **接力度量需要样本**：要比较"读过 pack / 没读过"，得两种会话都攒够几个；新装时对照为空是正常的。
 - **清理只认时效和结构位置**：`use_count=0` 只提醒不执行——"没人检索"不等于"没价值"。
   真正的取舍仍要人来定。
+
+---
+
+## 开发与测试
+
+全部自测都用临时库 + 临时目录，不会碰 `data/memory.db`：
+
+```powershell
+# 单元 / 集成
+.\.venv\Scripts\python.exe scripts\selftest_pack.py
+.\.venv\Scripts\python.exe scripts\selftest_v6.py
+.\.venv\Scripts\python.exe scripts\selftest_store.py
+.\.venv\Scripts\python.exe scripts\selftest_archive.py
+
+# MCP 端到端（起一个 server 子进程，走完整协议）
+.\.venv\Scripts\python.exe scripts\selftest_mcp.py
+
+# 插件静态自测（mock 宿主，不需要开 DSH）
+node scripts\selftest_plugin.mjs
+```
+
+自测脚本在 import `store` 之前会设 `DSH_RAG_PROJECTS_ROOT` / `DSH_RAG_HANDOFFS_ROOT` /
+`DSH_RAG_EMBED=off`——只隔离 `DSH_RAG_DB` 是不够的，`put_handoff` 会写磁盘。
+
+改完 `src/*.py` 之后**必须重启 DSH**：MCP server 是常驻进程，盘上的新代码它不会自己加载。
+CLI 和脚本没有这个限制。
+
+## License
+
+MIT，见 [LICENSE](LICENSE)。
+
+## 贡献
+
+欢迎 issue / PR。有两点约定：
+
+1. **改库只走 `Store`**，不要在别处直接 `conn.execute`（页面层例外，它有独立事务）。
+2. **自测必须临时库**；涉及文件系统副作用的，把三个路径变量都指到临时目录。
+

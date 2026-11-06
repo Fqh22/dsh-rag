@@ -12,10 +12,12 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
 import urllib.request
+from collections import OrderedDict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -27,8 +29,13 @@ ZHIPU_URL = "https://open.bigmodel.cn/api/paas/v4/embeddings"
 ZHIPU_MODEL = os.environ.get("DSH_RAG_ZHIPU_MODEL") or "embedding-3"
 ZHIPU_DIM = int(os.environ.get("DSH_RAG_ZHIPU_DIM") or 1024)
 ZHIPU_BATCH = 32          # 官方上限 64，留余量
-ZHIPU_TIMEOUT = 30
-ZHIPU_RETRIES = 2
+# 工具调用是**同步**的：一次 30s 超时 × 3 次会把整个 MCP 卡住近 90 秒，
+# 比「失败后降级成关键词」难受得多。10s × 2 次足够覆盖正常的网络抖动。
+ZHIPU_TIMEOUT = 10
+ZHIPU_RETRIES = 1
+# 输入窗口：智谱 embedding-3 约 3072 token，超长要切。缓存键也按同一个窗口算。
+MAX_CHARS = 4000
+CACHE_MAX = 512
 
 LOCAL_MODEL = "BAAI/bge-small-zh-v1.5"
 LOCAL_DIM = 512
@@ -41,7 +48,13 @@ else:
     MODEL_NAME = f"zhipu/{ZHIPU_MODEL}@{ZHIPU_DIM}"
 
 _error: str | None = None
-_cache: dict[str, list[float]] = {}
+# 进程内缓存：只存最近用到的若干条（LRU），长跑的服务不会无限涨内存
+_cache: OrderedDict[str, list[float]] = OrderedDict()
+
+
+def _key(text: str) -> str:
+    """缓存键：按「实际送进模型的那一段」算，截断后相同就是同一条。"""
+    return hashlib.sha1(text[:MAX_CHARS].encode("utf-8")).hexdigest()
 
 
 def error() -> str | None:
@@ -152,27 +165,28 @@ def embed(texts: list[str]) -> list[list[float]] | None:
         # 自测脚本设 DSH_RAG_EMBED=off，跑起来不花钱也不被网络拖慢。
         return None
 
-    todo: list[str] = []
-    keymap: list[str] = []
+    todo: list[tuple[str, str]] = []
     for t in texts:
-        k = t[:4000]
-        if k in _cache:
-            continue
-        todo.append(t)
-        keymap.append(k)
+        k = _key(t)
+        if k not in _cache:
+            todo.append((k, t))
 
     if todo:
         try:
+            payload = [t[:MAX_CHARS] for _, t in todo]
             if BACKEND == "local":
-                vecs = _local_embed(todo)
+                vecs = _local_embed(payload)
             else:
                 vecs = []
-                for i in range(0, len(todo), ZHIPU_BATCH):
-                    vecs.extend(_zhipu_embed(todo[i : i + ZHIPU_BATCH]))
-            if len(vecs) != len(todo):
+                for i in range(0, len(payload), ZHIPU_BATCH):
+                    vecs.extend(_zhipu_embed(payload[i : i + ZHIPU_BATCH]))
+            if len(vecs) != len(payload):
                 raise RuntimeError("向量条数不匹配")
-            for k, v in zip(keymap, vecs):
+            for (k, _), v in zip(todo, vecs):
                 _cache[k] = v
+                _cache.move_to_end(k)
+            while len(_cache) > CACHE_MAX:
+                _cache.popitem(last=False)
             _error = None
         except Exception as exc:  # noqa: BLE001
             _error = f"{type(exc).__name__}: {exc}"
@@ -180,9 +194,11 @@ def embed(texts: list[str]) -> list[list[float]] | None:
 
     out: list[list[float]] = []
     for t in texts:
-        v = _cache.get(t[:4000])
+        k = _key(t)
+        v = _cache.get(k)
         if v is None:
             return None
+        _cache.move_to_end(k)
         out.append(v)
     return out
 

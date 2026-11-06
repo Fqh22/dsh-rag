@@ -157,7 +157,8 @@ def run(store, session_probe: int = 6, verbose: bool = False) -> dict[str, Any]:
         checks.append(_check("会话日志格式", "warn", f"检查失败：{type(exc).__name__}: {exc}"))
 
     # ---------------------------------------------------------------- 内容健康度
-    ov = store.overview()
+    # sync=False：体检不该顺手写 projects 表（overview 默认会 sync）
+    ov = store.overview(sync=False)
     # 已归档的项目没有目录是正常的（比如 agentd 并进了 qq-cloud-bot），不算孤儿
     archived = {r[0] for r in conn.execute(
         "SELECT name FROM projects WHERE archived_at IS NOT NULL")}

@@ -25,12 +25,14 @@ from typing import Any, Iterable
 import numpy as np
 
 import card as card_mod
+import paths
 import projects as projects_mod
 import schema
 
 ROOT = __import__("pathlib").Path(__file__).resolve().parent.parent
+# 数据目录可整体搬走（DSH_RAG_DATA），单库仍可用 DSH_RAG_DB 精确指定
 DB_PATH = __import__("pathlib").Path(
-    os.environ.get("DSH_RAG_DB") or (ROOT / "data" / "memory.db")
+    os.environ.get("DSH_RAG_DB") or (paths.DATA_ROOT / "memory.db")
 )
 
 _CJK = re.compile(r"[\u4e00-\u9fff]")
@@ -151,7 +153,7 @@ class Store:
         # 至少三个进程会写这个库：MCP 服务、归档守护、运维脚本。默认 busy_timeout=0
         # 时后到的写入直接报 database is locked，不是数据问题，等一会儿就过去了。
         self._conn.execute("PRAGMA busy_timeout=5000")
-        self.migration = schema.ensure(self._conn)
+        self.migration = schema.ensure(self._conn, self.db_path)
         # 页面层（长文档的目录 + 块）建表是纯增量，不碰 memories
         try:
             import pages as pages_mod
@@ -160,8 +162,26 @@ class Store:
         except Exception as e:  # noqa: BLE001
             print(f"[store] pages 建表失败：{e}")
         self._vec_cache: tuple[str, np.ndarray, list[int]] | None = None
+        # 最近一次危险操作（删项目）留下的备份路径，给 CLI / 面板回显用
+        self.last_backup: str | None = None
         if self.migration.get("migrated"):
             self.sync_projects()
+
+    def _backup(self, tag: str) -> str:
+        """整库快照（sqlite backup API，WAL 会合并）。失败会抛——危险操作不该硬着头皮继续。"""
+        import time as _time
+
+        ts = _time.strftime("%Y%m%d-%H%M%S")
+        dest = self.db_path.parent / "backup" / f"{tag}-{ts}.db"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        src = sqlite3.connect(str(self.db_path))
+        dst = sqlite3.connect(str(dest))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+        return str(dest)
 
     # ----------------------------------------------------------------- 项目
     def _known_projects(self) -> list[str]:
@@ -176,33 +196,44 @@ class Store:
         """把磁盘目录与记忆里出现过的项目登记进 projects 表。
 
         目录是权威（决定 hasDir / 归档状态），表只是登记簿。
+        只在**真有变化**时写库：面板每 10 秒轮询一次 overview，无脑 UPSERT
+        等于每 10 秒一次写事务，和 MCP 的写入抢锁。
         """
         ts = now_iso()
         dirs = projects_mod.scan_dirs(force=True)
-        known = set(self._known_projects())
         with self._lock:
+            rows = {
+                r["name"]: (r["dir_path"], r["archived_at"])
+                for r in self._conn.execute(
+                    "SELECT name, dir_path, archived_at FROM projects"
+                ).fetchall()
+            }
+            changed = False
             for name in dirs:
-                self._conn.execute(
-                    """INSERT INTO projects(name, dir_path, first_seen, updated_at)
-                       VALUES (?,?,?,?)
-                       ON CONFLICT(name) DO UPDATE SET
-                         dir_path=excluded.dir_path,
-                         updated_at=excluded.updated_at,
-                         archived_at=NULL""",
-                    (name, str(projects_mod.PROJECTS_ROOT / name), ts, ts),
-                )
-            for name in known:
+                want = str(projects_mod.PROJECTS_ROOT / name)
+                cur = rows.get(name)
+                if cur is None or cur[0] != want or cur[1]:
+                    self._conn.execute(
+                        """INSERT INTO projects(name, dir_path, first_seen, updated_at)
+                           VALUES (?,?,?,?)
+                           ON CONFLICT(name) DO UPDATE SET
+                             dir_path=excluded.dir_path,
+                             updated_at=excluded.updated_at,
+                             archived_at=NULL""",
+                        (name, want, ts, ts),
+                    )
+                    changed = True
+            for name, (dir_path, archived_at) in rows.items():
                 if name in dirs or name in projects_mod.RESERVED:
                     continue
-                row = self._conn.execute(
-                    "SELECT dir_path, archived_at FROM projects WHERE name=?", (name,)
-                ).fetchone()
-                if row and row["dir_path"] and not row["archived_at"]:
+                if dir_path and not archived_at:
                     self._conn.execute(
                         "UPDATE projects SET dir_path=NULL, archived_at=?, updated_at=? WHERE name=?",
                         (ts, ts, name),
                     )
-            self._conn.commit()
+                    changed = True
+            if changed:
+                self._conn.commit()
         return len(dirs)
 
     def _touch_project(self, name: str, ts: str | None = None) -> None:
@@ -242,8 +273,14 @@ class Store:
         ts: str | None = None,
         meta: dict[str, Any] | None = None,
         source: str = "manual",
+        revive: bool = False,
     ) -> tuple[int, bool]:
-        """写入一条记忆。返回 (id, 是否新建)。内容完全相同时幂等返回旧 id。"""
+        """写入一条记忆。返回 (id, 是否新建)。内容完全相同时幂等返回旧 id。
+
+        `revive` 控制「同内容命中但状态不同」时要不要把状态改回来。默认不动 ——
+        否则归档过的会话摘要被 backfill 重抽一次就会复活，等于把 cleanup 静默撤销
+        （2026-11-06 审视踩到）。put_handoff 需要这个语义，它显式传 revive=True。
+        """
         project = self.normalize_project(project)
         kind = (kind or "fact").strip() or "fact"
         title = (title or "").strip()[:200] or "(无标题)"
@@ -257,10 +294,10 @@ class Store:
                 "SELECT id, status FROM memories WHERE content_hash = ?", (h,)
             ).fetchone()
             if row:
-                # 内容相同但状态不同时要把状态改回来：
+                # 内容相同但状态不同时，只有显式要求才改回去。
                 # put_handoff 会先把旧卡置 superseded，再用同样内容写一遍，
                 # 如果这里不恢复 active，结果就是「一张生效的卡都没有」。
-                if row["status"] != status:
+                if revive and row["status"] != status:
                     self._conn.execute(
                         "UPDATE memories SET status=?, updated_at=? WHERE id=?",
                         (status, ts, int(row["id"])),
@@ -299,7 +336,7 @@ class Store:
         with self._lock:
             mid, _ = self.remember(
                 project, "handoff", "项目交接卡", content,
-                session_id=session_id, source=source, meta=meta,
+                session_id=session_id, source=source, meta=meta, revive=True,
             )
             self._conn.execute(
                 "UPDATE memories SET superseded_by=?, status='superseded', updated_at=? "
@@ -461,21 +498,46 @@ class Store:
         session_id: str | None = None,
         source: str = "archive-draft",
     ) -> int:
-        """写一份状态草稿（不覆盖生效状态）。同项目只留最新一份草稿。"""
+        """写一份状态草稿（不覆盖生效状态）。同项目只留最新一份草稿。
+
+        同项目已有草稿时**原地更新**，不再每次归档都新增一条再置旧的 superseded
+        —— 否则每轮归档都留一份历史草稿，cleanup 永远追不上（2026-11-06 审视）。
+        """
         project = self.normalize_project(project)
         payload = dict(meta)
         payload["draft"] = True
         payload["updated_at"] = now_iso()
+        ts = payload["updated_at"]
         text = card_mod.render_card(project, payload)
+        meta_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
         with self._lock:
-            mid, _ = self.remember(
-                project, "checkpoint", "项目状态草稿", text,
-                session_id=session_id, status="draft", source=source, meta=payload,
-            )
+            prev = self.get_draft(project)
+            if prev is not None:
+                mid = prev.id
+                h = self._hash(project, "项目状态草稿", text)
+                dup = self._conn.execute(
+                    "SELECT id FROM memories WHERE content_hash = ? AND id != ?",
+                    (h, mid),
+                ).fetchone()
+                if not dup:
+                    self._conn.execute(
+                        "UPDATE memories SET content=?, content_hash=?, meta_json=?, "
+                        "status='draft', updated_at=?, source=? WHERE id=?",
+                        (text, h, meta_json, ts, source, mid),
+                    )
+                    self._fts_put(mid, "项目状态草稿", text)
+                    self._invalidate_vec_cache()
+            else:
+                mid, _ = self.remember(
+                    project, "checkpoint", "项目状态草稿", text,
+                    session_id=session_id, status="draft", source=source, meta=payload,
+                )
+            # 防御：历史遗留的多份 draft 收敛成一份
             self._conn.execute(
-                "UPDATE memories SET status='superseded', superseded_by=?, updated_at=? "
+                "UPDATE memories SET status='superseded', updated_at=? "
                 "WHERE project=? AND kind='checkpoint' AND status='draft' AND id != ?",
-                (mid, now_iso(), project, mid),
+                (ts, project, mid),
             )
             self._conn.commit()
         return mid
@@ -523,9 +585,34 @@ class Store:
                 (now_iso(), int(memory_id)),
             )
             self._conn.commit()
-            return bool(cur.rowcount)
+            ok = bool(cur.rowcount)
+            row = self._conn.execute(
+                "SELECT title, content FROM memories WHERE id=?", (int(memory_id),)
+            ).fetchone()
+        if not ok:
+            return False
+        # 归档时 cleanup 删过向量。只把状态改回来会得到「关键词搜得到、语义搜不到」
+        # 的半残记忆 —— 比不恢复更难发现，所以这里补一次。
+        if row:
+            self._reembed(int(memory_id), row["title"], row["content"])
+        return True
 
     # ----------------------------------------------------------------- 会话
+    def supersede_session_memories(self, session_id: str) -> int:
+        """把一个会话的旧摘要置为失效（重归档前调用）。返回条数。
+
+        重抽会得到新内容 → 新 hash → 新行。不作废旧行的话，同一个会话会有
+        两条 active 摘要，接力度量和整库统计都会重复计数。
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE memories SET status='superseded', updated_at=? "
+                "WHERE kind='session' AND session_id=? AND status='active'",
+                (now_iso(), session_id),
+            )
+            self._conn.commit()
+            return int(cur.rowcount or 0)
+
     def upsert_session(
         self,
         session_id: str,
@@ -965,7 +1052,7 @@ class Store:
                 from datetime import datetime as _dt
 
                 age_hours = (_dt.now().astimezone() - _dt.fromisoformat(started)).total_seconds() / 3600
-            except ValueError:
+            except (ValueError, TypeError):
                 age_hours = None
 
         if age_hours is not None and age_hours > 24:
@@ -995,13 +1082,17 @@ class Store:
         }
 
     # ----------------------------------------------------------------- 总览
-    def overview(self) -> list[dict[str, Any]]:
+    def overview(self, sync: bool = True) -> list[dict[str, Any]]:
         """项目总览：每个项目一条，带交接卡摘要与会话台账。
 
         项目来源 = projects 登记簿 ∪ Projects 目录下的真实目录。
         后者保证「新建了项目但还没写过记忆」也能在面板上看到。
+
+        `sync=False` 给只读场景（doctor）用：它会写 projects 表，
+        体检不该顺手改数据。
         """
-        self.sync_projects()
+        if sync:
+            self.sync_projects()
         with self._lock:
             rows = self._conn.execute("SELECT * FROM v_project_stats").fetchall()
             hrows = self._conn.execute(
@@ -1098,12 +1189,15 @@ class Store:
         return out
 
     def delete_project(self, project: str) -> int:
-        """删除一个项目的全部记忆（含 FTS 与向量）。返回删除条数。
+        """删除一个项目的全部记忆（含 FTS、向量、页面层）。返回删除条数。
 
         只删数据库；项目目录和导出的 md 不动——删目录是文件系统的事，
         这里只负责把「记忆」这一层的残留清掉。
         """
         project = self.normalize_project(project)
+        # 硬删不可恢复：先留一份整库快照（失败会抛，删除就不会执行）。
+        # 项目目录被临时改名 / 断网盘时面板仍会显示「清理」，这道兜底就是为它准备的。
+        self.last_backup = self._backup("prune")
         with self._lock:
             ids = [
                 int(r["id"])
@@ -1111,7 +1205,24 @@ class Store:
                     "SELECT id FROM memories WHERE project = ?", (project,)
                 ).fetchall()
             ]
+            # 页面层是独立的两张表：不清就会留下「项目已删、pages_index 还查得到」的鬼影
+            try:
+                page_ids = [
+                    int(r["id"])
+                    for r in self._conn.execute(
+                        "SELECT id FROM pages WHERE project = ?", (project,)
+                    ).fetchall()
+                ]
+                if page_ids:
+                    pph = ",".join("?" * len(page_ids))
+                    self._conn.execute(
+                        f"DELETE FROM chunks WHERE page_id IN ({pph})", page_ids
+                    )
+                    self._conn.execute("DELETE FROM pages WHERE project = ?", (project,))
+            except sqlite3.DatabaseError:
+                pass          # 老库可能还没有页面层
             if not ids:
+                self._conn.commit()
                 return 0
             ph = ",".join("?" * len(ids))
             self._conn.execute(f"DELETE FROM memories_fts WHERE rowid IN ({ph})", ids)
@@ -1168,16 +1279,20 @@ class Store:
 
         换过 embedding 后端后，旧模型的向量也算「缺」——它和当前模型的向量不在同一个
         空间里，RAG 里混算没有意义，所以按 model 过滤而不是只看有没有行。
+        `model=None` 表示「任何模型的向量都算数」。
         """
         sql = (
             "SELECT m.id, m.project, m.kind, m.title, m.content, m.updated_at "
             "FROM memories m "
-            "LEFT JOIN vectors v ON v.memory_id = m.id AND v.model = ? "
-            "WHERE v.memory_id IS NULL AND m.status = 'active' "
-            "ORDER BY m.id"
+            "LEFT JOIN vectors v ON v.memory_id = m.id"
         )
+        params: tuple = ()
+        if model:
+            sql += " AND v.model = ?"
+            params = (model,)
+        sql += " WHERE v.memory_id IS NULL AND m.status = 'active' ORDER BY m.id"
         with self._lock:
-            rows = self._conn.execute(sql, (model or "",)).fetchall()
+            rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
     def stats(self, model: str | None = None) -> dict[str, Any]:
@@ -1212,10 +1327,11 @@ class Store:
                 "SELECT COUNT(*) c FROM memories WHERE status='archived'").fetchone()["c"]
             drafts = self._conn.execute(
                 "SELECT COUNT(*) c FROM memories WHERE status='draft'").fetchone()["c"]
+            info = schema.schema_info(self._conn)
         return {
             "total": total, "active": active, "vectors": vec,
             "missing_vectors": missing,
             "archived": int(archived), "drafts": int(drafts),
             "projects": proj, "sessions": sess, "kinds": by_kind,
-            "schema": schema.schema_info(self._conn),
+            "schema": info,
         }

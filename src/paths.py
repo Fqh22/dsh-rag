@@ -21,6 +21,9 @@ def _env_path(name: str, default: Path) -> Path:
 # 本仓库根目录（src/ 的上一级）
 REPO_ROOT: Path = Path(__file__).resolve().parent.parent
 
+# 运行期数据（memory.db、备份、changelog 状态）。自测用 DSH_RAG_DATA 指到临时目录。
+DATA_ROOT: Path = _env_path("DSH_RAG_DATA", REPO_ROOT / "data")
+
 # 被记忆的项目都放在这个目录下，一个子目录 = 一个项目
 PROJECTS_ROOT: Path = _env_path(
     "DSH_RAG_PROJECTS_ROOT",

@@ -224,6 +224,8 @@ def purge(store, days: int | None = None) -> dict[str, Any]:
         ph = ",".join("?" * len(ids))
         conn.execute(f"DELETE FROM memories_fts WHERE rowid IN ({ph})", ids)
         conn.execute(f"DELETE FROM vectors WHERE memory_id IN ({ph})", ids)
+        # 会话台账里还指着这条记忆的话一并断掉，否则 memory_id 指向已删除的行
+        conn.execute(f"UPDATE sessions SET memory_id=NULL WHERE memory_id IN ({ph})", ids)
         conn.execute(f"DELETE FROM memories WHERE id IN ({ph})", ids)
         conn.commit()
     store._invalidate_vec_cache()

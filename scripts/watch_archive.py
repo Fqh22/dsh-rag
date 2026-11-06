@@ -24,8 +24,11 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
-STATE = ROOT / "data" / "watch-state.json"
-INGEST_DAY = ROOT / "data" / "ingest-day.json"
+import paths  # noqa: E402
+
+STATE = paths.DATA_ROOT / "watch-state.json"
+INGEST_DAY = paths.DATA_ROOT / "ingest-day.json"
+LOCK = paths.DATA_ROOT / "watch.lock"
 LOG = ROOT / "logs" / "archive.log"
 INTERVAL = int(os.environ.get("DSH_RAG_SCAN_SECONDS") or 300)
 
@@ -35,6 +38,35 @@ def log(msg: str) -> None:
     ts = datetime.now().astimezone().isoformat(timespec="seconds")
     with open(LOG, "a", encoding="utf-8") as f:
         f.write(f"{ts}  {msg}\n")
+
+
+def acquire_lock():
+    """单实例锁。
+
+    装自启时 install-autostart.ps1 会立刻 Start-Process 一次，用户也可能手动再起一个；
+    两个 watcher 扫同一批会话时，remember 的 SELECT→INSERT 会撞
+    UNIQUE constraint，而 archive.run 没有 per-session 的 try，整批归档会中断。
+    """
+    LOCK.parent.mkdir(parents=True, exist_ok=True)
+    f = open(LOCK, "a+")
+    try:
+        f.seek(0, os.SEEK_END)
+        if f.tell() == 0:
+            f.write("lock\n")
+            f.flush()
+        f.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return f
+    except OSError:
+        f.close()
+        return None
 
 
 def load_state() -> dict:
@@ -49,17 +81,15 @@ def load_state() -> dict:
     return state
 
 
-def scan_once() -> str:
+def scan_once(s) -> str:
     import archive
-    import store as store_mod
 
     st = load_state()
     cutoff = float(st["archive_from"])
-    s = store_mod.Store()
     return archive.run(store=s, limit=10, min_mtime=cutoff)
 
 
-def maybe_ingest() -> str | None:
+def maybe_ingest(s) -> str | None:
     """每天一次：把各项目的变更记录增量灌进记忆库（不调模型，只补新的）。
 
     放在守护进程里而不是让人手动跑——手动步骤迟早会忘，忘了记忆库就落后于代码。
@@ -73,9 +103,7 @@ def maybe_ingest() -> str | None:
     if st.get("day") == today:
         return None
     import changelog as cl
-    from store import Store
 
-    s = Store()
     cooked = []
     for r in cl.ingest_all(s, limit=10):
         if r.get("added"):
@@ -86,20 +114,29 @@ def maybe_ingest() -> str | None:
 
 
 def main() -> None:
+    lock = acquire_lock()
+    if lock is None:
+        log("另一个 watcher 已在运行，本进程退出")
+        return
+    from store import Store
+
+    s = Store()          # 常驻一个连接：每 5 分钟新开一个会泄漏文件句柄
     log(f"watcher start, interval={INTERVAL}s, root={ROOT}")
     while True:
         try:
-            msg = scan_once()
+            msg = scan_once(s)
             if msg:
                 log(msg)
         except Exception:  # noqa: BLE001
             log("ERROR " + traceback.format_exc().replace("\n", " | "))
+            s.rollback()
         try:
-            msg = maybe_ingest()
+            msg = maybe_ingest(s)
             if msg:
                 log(msg)
         except Exception:  # noqa: BLE001
             log("INGEST ERROR " + traceback.format_exc().replace("\n", " | "))
+            s.rollback()
         time.sleep(INTERVAL)
 
 

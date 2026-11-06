@@ -57,7 +57,11 @@
       } catch (e) {
         throw new Error('接口返回非 JSON（HTTP ' + res.status + '）')
       }
-      if (!data || data.ok !== true) throw new Error((data && data.error) || '请求失败')
+      if (!data || data.ok !== true) {
+        // CLI 的失败有两种写法：error（参数/流程错误）和 message（业务拒绝，
+        // 比如「与 id=7 内容重复」）。只读 error 会让最常见的那种显示成「请求失败」。
+        throw new Error((data && (data.error || data.message)) || '请求失败')
+      }
       return data
     }
 
@@ -302,6 +306,7 @@
       posRef.current = pos
       const dragRef = useRef(null)
       const timer = useRef(null)
+      const toastTimer = useRef(null)
       const searchRef = useRef(null)
 
       // 位置兜底：窗口变小、或面板展开后高度暴涨时，把整个面板拉回可视区。
@@ -327,6 +332,16 @@
         }
       }, [pos, open])
 
+      // 关闭面板时清掉「半截状态」：否则重开时搜索框还留着上次的字，列表却是全量的；
+      // 更要命的是编辑到一半的旧快照会活下来，重开再保存就把别人改过的新内容盖掉。
+      useEffect(() => {
+        if (open) return
+        setQuery('')
+        setEditing(null)
+        setExpanded({})
+        setError('')
+      }, [open])
+
       const loadBase = useCallback(async () => {
         setLoading(true)
         setError('')
@@ -346,7 +361,11 @@
           const r = await api(API + '/overview')
           setOverview(r.projects || [])
         } catch (e) {
-          setOverview([])
+          // 一次慢/失败就清空列表，会让人以为数据没了。保留上一次的结果，
+          // 下个轮询周期自己会恢复。
+          if (typeof console !== 'undefined') {
+            console.warn('[dsh-rag] overview 刷新失败：', (e && e.message) || e)
+          }
         }
       }, [])
 
@@ -356,11 +375,17 @@
           const r = await api(API + '/cache?limit=20')
           setCache(r)
         } catch (e) {
-          setCache(null)
+          if (typeof console !== 'undefined') {
+            console.warn('[dsh-rag] cache 刷新失败：', (e && e.message) || e)
+          }
         }
       }, [])
 
+      // 请求序号：recall 走向量要 1–2 秒，比 280ms 的防抖长。没有序号时，
+      // 先发的慢响应会后到并覆盖新结果（甚至把 A 的交接卡盖到 B 上）。
+      const listSeq = useRef(0)
       const loadList = useCallback(async (proj, q) => {
+        const my = ++listSeq.current
         setLoading(true)
         setError('')
         try {
@@ -369,22 +394,26 @@
           if (q) {
             qs.push('q=' + encodeURIComponent(q))
             const r = await api(API + '/recall?' + qs.join('&'))
+            if (my !== listSeq.current) return
             setItems(r.items || [])
           } else {
             qs.push('limit=60')
             const r = await api(API + '/recent?' + qs.join('&'))
+            if (my !== listSeq.current) return
             setItems(r.items || [])
           }
           if (proj) {
             const hres = await api(API + '/handoff?project=' + encodeURIComponent(proj))
+            if (my !== listSeq.current) return
             setHandoff(hres.handoff)
           } else {
             setHandoff(null)
           }
         } catch (e) {
+          if (my !== listSeq.current) return
           setError(String(e.message || e))
         } finally {
-          setLoading(false)
+          if (my === listSeq.current) setLoading(false)
         }
       }, [])
 
@@ -432,7 +461,9 @@
 
       const flash = useCallback((msg) => {
         setToast(msg)
-        setTimeout(function () { setToast('') }, 1800)
+        // 复用同一个 timer：连续两条提示时，前一个的 1.8s 会把后一条提前撤掉
+        if (toastTimer.current) clearTimeout(toastTimer.current)
+        toastTimer.current = setTimeout(function () { setToast('') }, 1800)
       }, [])
 
       const createHandoff = useCallback(async (name) => {
@@ -483,7 +514,14 @@
             }),
           })
           setEditing(null)
-          flash(r.message || '已保存')
+          // CLI 在「内容改了但向量没重算」时会带 warning。只读 message
+          // 会让面板说「已更新」，而语义检索还在按旧内容召回。
+          if (r.warning) {
+            flash(r.warning)
+            if (typeof console !== 'undefined') console.warn('[dsh-rag]', r.warning)
+          } else {
+            flash(r.message || '已保存')
+          }
           await loadList(project, query.trim())
           if (!project) await loadOverview()
         } catch (e) {
@@ -757,9 +795,14 @@
           wrap.style.bottom = 'auto'
         }
 
-        function up() {
+        function detach() {
           window.removeEventListener('mousemove', move)
           window.removeEventListener('mouseup', up)
+          window.removeEventListener('blur', onBlur)
+        }
+
+        function up() {
+          detach()
           if (!moved) {
             setPos(prevPos)   // 只是单击，别把刚才的临时落位当成拖动结果
             if (toggleOnClick) setOpen(function (o) { return !o })
@@ -771,8 +814,15 @@
           savePos(p)
         }
 
+        // 鼠标在窗口外松开（alt-tab、拖出浏览器）时 mouseup 不会来，
+        // 监听会常驻、面板继续跟着鼠标跑。blur 兜底把它们摘掉。
+        function onBlur() {
+          detach()
+        }
+
         window.addEventListener('mousemove', move)
         window.addEventListener('mouseup', up)
+        window.addEventListener('blur', onBlur)
       }
 
       function resetPos(e) {

@@ -19,7 +19,7 @@ from typing import Any
 from store import DB_PATH, Store
 
 SERVER_NAME = "dsh-rag"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.7.0"
 DEFAULT_PROTOCOL = "2025-06-18"
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -614,9 +614,11 @@ def tool_pages_search(args: dict[str, Any]) -> dict[str, Any]:
         return _err("query 不能为空")
     import pages as pages_mod
 
-    conn = store._conn  # type: ignore[union-attr]
-    hits = pages_mod.search_chunks(conn, q, args.get("project") or None,
-                                   int(args.get("limit") or 3))
+    # 同一连接会被 startup-archive 线程使用，读也要拿锁
+    with store._lock:  # type: ignore[union-attr]
+        conn = store._conn
+        hits = pages_mod.search_chunks(conn, q, args.get("project") or None,
+                                       int(args.get("limit") or 3))
     if not hits:
         return _ok(f"页面层里没检索到与「{q}」相关的段落。")
     lines = []
@@ -630,9 +632,10 @@ def tool_pages_index(args: dict[str, Any]) -> dict[str, Any]:
     """长文档的目录：标题 + 摘要 + 是否过期。比全文便宜得多。"""
     import pages as pages_mod
 
-    conn = store._conn  # type: ignore[union-attr]
-    rows = pages_mod.index_list(conn, args.get("project") or None,
-                                int(args.get("limit") or 40))
+    with store._lock:  # type: ignore[union-attr]
+        conn = store._conn
+        rows = pages_mod.index_list(conn, args.get("project") or None,
+                                    int(args.get("limit") or 40))
     if not rows:
         return _ok("页面层还是空的（用 `cli.py pages --dir <目录> --project <项目>` 灌）。")
     return _ok(pages_mod.render_index(rows))

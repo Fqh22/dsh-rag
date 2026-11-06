@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
 SCHEMA_VERSION = 6
 
@@ -143,35 +144,84 @@ def _columns(conn: sqlite3.Connection, table: str) -> list[str]:
         return []
 
 
-def ensure(conn: sqlite3.Connection) -> dict:
-    """把连接上的库升到当前版本。返回 {from, to, migrated}。"""
+def _snapshot(db_path) -> str | None:
+    """迁移前整库快照（sqlite backup API，WAL 会一起合并）。
+
+    迁移失败一次就可能留下半迁移库；有这份文件，最坏也只是覆盖回去。
+    """
+    if db_path is None:
+        return None
+    src_path = Path(str(db_path))
+    if not src_path.exists():
+        return None
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest = src_path.parent / "backup" / f"pre-migrate-{ts}.db"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    src = sqlite3.connect(str(src_path))
+    dst = sqlite3.connect(str(dest))
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    return str(dest)
+
+
+def _exec_script(conn: sqlite3.Connection, sql: str) -> None:
+    """逐条执行建表脚本。
+
+    不用 executescript：它会先把当前事务提交掉，DDL 立即落盘，
+    一旦后面某条失败就停在半迁移状态（2026-11-06 审视）。
+    """
+    for stmt in sql.split(";"):
+        s = stmt.strip()
+        if s:
+            conn.execute(s)
+
+
+def ensure(conn: sqlite3.Connection, db_path=None) -> dict:
+    """把连接上的库升到当前版本。返回 {from, to, migrated, backup}。"""
     conn.execute("PRAGMA foreign_keys=OFF")
     version = int(conn.execute("PRAGMA user_version").fetchone()[0])
 
+    if version > SCHEMA_VERSION:
+        raise RuntimeError(
+            f"库结构是 v{version}，这份代码只到 v{SCHEMA_VERSION}。"
+            "用旧代码打开新库会漏字段、甚至把版本号写回去；"
+            "请升级 dsh-rag，或从 data/backup 里的快照恢复。"
+        )
+
     if version == SCHEMA_VERSION:
-        return {"from": version, "to": SCHEMA_VERSION, "migrated": False}
+        return {"from": version, "to": SCHEMA_VERSION, "migrated": False, "backup": None}
 
     has_memories = _table_exists(conn, "memories")
     old_version = version
     if not has_memories:
         _create_fresh(conn)
-        return {"from": 0, "to": SCHEMA_VERSION, "migrated": True}
+        return {"from": 0, "to": SCHEMA_VERSION, "migrated": True, "backup": None}
+
+    backup = _snapshot(db_path)
 
     cols = _columns(conn, "memories")
     if "meta_json" in cols:
         # 结构已经是 v5 系，只补增量列（v6 加使用计数，用于判断"值不值得留"）
-        changed = _add_missing_columns(conn, "memories", {
-            "use_count": "INTEGER NOT NULL DEFAULT 0",
-            "last_used_at": "TEXT",
-        })
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_used ON memories(last_used_at)")
-        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-        _ensure_meta(conn)
-        conn.commit()
-        return {"from": old_version, "to": SCHEMA_VERSION, "migrated": changed}
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            changed = _add_missing_columns(conn, "memories", {
+                "use_count": "INTEGER NOT NULL DEFAULT 0",
+                "last_used_at": "TEXT",
+            })
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_used ON memories(last_used_at)")
+            conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            _ensure_meta(conn)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return {"from": old_version, "to": SCHEMA_VERSION, "migrated": changed, "backup": backup}
 
     _migrate_v4_to_v5(conn)
-    return {"from": old_version, "to": SCHEMA_VERSION, "migrated": True}
+    return {"from": old_version, "to": SCHEMA_VERSION, "migrated": True, "backup": backup}
 
 
 def _add_missing_columns(conn: sqlite3.Connection, table: str, spec: dict[str, str]) -> bool:
@@ -186,11 +236,21 @@ def _add_missing_columns(conn: sqlite3.Connection, table: str, spec: dict[str, s
     return changed
 
 
+def _begin(conn: sqlite3.Connection) -> None:
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+
+
 def _create_fresh(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA_SQL)
-    conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-    _ensure_meta(conn)
-    conn.commit()
+    _begin(conn)
+    try:
+        _exec_script(conn, SCHEMA_SQL)
+        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        _ensure_meta(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _ensure_meta(conn: sqlite3.Connection) -> None:
@@ -203,69 +263,71 @@ def _ensure_meta(conn: sqlite3.Connection) -> None:
 def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
     """v4 → v5：换一张更清楚的表，但一条记忆都不丢。
 
+    整段在一个 BEGIN IMMEDIATE 里：改名、建表、搬数据要么全成、要么全退。
     旧表不删，重命名成 `_v4_*` 留在库里 —— 迁移是一次性操作，
     留一份原样数据比任何「应该没问题」都可靠；确认无事后再手工 DROP。
     """
     ts = now_iso()
-    conn.executescript(
-        """
-        ALTER TABLE memories RENAME TO _v4_memories;
-        ALTER TABLE vectors  RENAME TO _v4_vectors;
-        """
-    )
-    if _table_exists(conn, "archivals"):
-        conn.execute("ALTER TABLE archivals RENAME TO _v4_archivals")
-    # FTS 表与 memories 解耦，重建一次最省心
-    conn.execute("DROP TABLE IF EXISTS memories_fts")
+    _begin(conn)
+    try:
+        conn.execute("ALTER TABLE memories RENAME TO _v4_memories")
+        conn.execute("ALTER TABLE vectors RENAME TO _v4_vectors")
+        if _table_exists(conn, "archivals"):
+            conn.execute("ALTER TABLE archivals RENAME TO _v4_archivals")
+        # FTS 表与 memories 解耦，重建一次最省心
+        conn.execute("DROP TABLE IF EXISTS memories_fts")
 
-    conn.executescript(SCHEMA_SQL)
+        _exec_script(conn, SCHEMA_SQL)
 
-    conn.execute(
-        """INSERT INTO memories
-             (id, project, kind, title, content, meta_json, status, superseded_by,
-              session_id, source, created_at, updated_at, content_hash)
-           SELECT id, project, kind, title, content, '{}', status, NULL,
-                  session_id,
-                  CASE WHEN session_id IS NULL OR session_id='' THEN 'manual' ELSE 'archive' END,
-                  created_at, updated_at, content_hash
-           FROM _v4_memories"""
-    )
-    conn.execute(
-        """INSERT INTO vectors (memory_id, model, dim, vec, updated_at)
-           SELECT memory_id, model, dim, vec, ? FROM _v4_vectors""",
-        (ts,),
-    )
-
-    # 项目登记簿：从已有记忆推出来（目录路径由 Store 打开时按磁盘补齐）
-    conn.execute(
-        """INSERT OR IGNORE INTO projects (name, dir_path, first_seen, updated_at)
-           SELECT project, NULL, MIN(created_at), MAX(updated_at)
-           FROM memories GROUP BY project"""
-    )
-
-    # 旧交接卡链：v4 只把 status 置 superseded，superseded_by 一直是 NULL
-    _rebuild_supersede_chain(conn)
-
-    if _table_exists(conn, "_v4_archivals"):
         conn.execute(
-            """INSERT OR IGNORE INTO sessions
-                 (session_id, project, archived_at, memory_id, started_at, last_seen_at)
-               SELECT a.session_id, m.project, a.archived_at, a.memory_id, m.created_at, a.archived_at
-               FROM _v4_archivals a
-               LEFT JOIN memories m ON m.id = a.memory_id"""
+            """INSERT INTO memories
+                 (id, project, kind, title, content, meta_json, status, superseded_by,
+                  session_id, source, created_at, updated_at, content_hash)
+               SELECT id, project, kind, title, content, '{}', status, NULL,
+                      session_id,
+                      CASE WHEN session_id IS NULL OR session_id='' THEN 'manual' ELSE 'archive' END,
+                      created_at, updated_at, content_hash
+               FROM _v4_memories"""
+        )
+        conn.execute(
+            """INSERT INTO vectors (memory_id, model, dim, vec, updated_at)
+               SELECT memory_id, model, dim, vec, ? FROM _v4_vectors""",
+            (ts,),
         )
 
-    # 重建 FTS
-    conn.execute("DELETE FROM memories_fts")
-    for r in conn.execute("SELECT id, title, content FROM memories").fetchall():
+        # 项目登记簿：从已有记忆推出来（目录路径由 Store 打开时按磁盘补齐）
         conn.execute(
-            "INSERT INTO memories_fts(rowid, title_tok, content_tok) VALUES (?,?,?)",
-            (int(r["id"]), _tok(r["title"]), _tok(r["content"])),
+            """INSERT OR IGNORE INTO projects (name, dir_path, first_seen, updated_at)
+               SELECT project, NULL, MIN(created_at), MAX(updated_at)
+               FROM memories GROUP BY project"""
         )
 
-    conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-    _ensure_meta(conn)
-    conn.commit()
+        # 旧交接卡链：v4 只把 status 置 superseded，superseded_by 一直是 NULL
+        _rebuild_supersede_chain(conn)
+
+        if _table_exists(conn, "_v4_archivals"):
+            conn.execute(
+                """INSERT OR IGNORE INTO sessions
+                     (session_id, project, archived_at, memory_id, started_at, last_seen_at)
+                   SELECT a.session_id, m.project, a.archived_at, a.memory_id, m.created_at, a.archived_at
+                   FROM _v4_archivals a
+                   LEFT JOIN memories m ON m.id = a.memory_id"""
+            )
+
+        # 重建 FTS
+        conn.execute("DELETE FROM memories_fts")
+        for r in conn.execute("SELECT id, title, content FROM memories").fetchall():
+            conn.execute(
+                "INSERT INTO memories_fts(rowid, title_tok, content_tok) VALUES (?,?,?)",
+                (int(r["id"]), _tok(r["title"]), _tok(r["content"])),
+            )
+
+        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        _ensure_meta(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _rebuild_supersede_chain(conn: sqlite3.Connection) -> None:

@@ -11,9 +11,10 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
+
+import paths
 
 ENTRY_RE = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?)\s*[·:：-]?\s*(.+?)\s*$")
 # 只灌「有可复用结论」的条目：纯过程记录（改了几个文件、跑了几次测试）灌进去
@@ -23,10 +24,11 @@ MAX_CHARS = 400
 PATTERNS = ("docs/99-*.md", "CHANGELOG.md", "docs/CHANGELOG.md",
             "变更记录.md", "docs/变更记录.md")
 
-PROJECTS_ROOT = Path(os.environ.get(
-    "DSH_PROJECTS", Path.home() / "Documents" / "Projects"))
-STATE = Path(os.environ.get(
-    "DSH_RAG_DATA", Path(__file__).resolve().parent.parent / "data")) / "changelog_state.json"
+# 一律走 paths，别再自己读一套环境变量：以前这里用 DSH_PROJECTS / DSH_RAG_DATA，
+# 和 paths.py 的 DSH_RAG_PROJECTS_ROOT / DSH_RAG_DB 不是一回事，
+# 测试把库指到临时目录后，这里照样写生产 data/changelog_state.json。
+PROJECTS_ROOT = paths.PROJECTS_ROOT
+STATE = paths.DATA_ROOT / "changelog_state.json"
 
 
 def parse_entries(text: str) -> list[dict]:

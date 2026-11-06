@@ -1,6 +1,6 @@
 {
   "name": "dsh-rag-panel",
-  "version": "0.1.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "DeepSeek Harness 项目记忆库面板：浏览各项目的交接卡与记忆条目，支持检索与写入",

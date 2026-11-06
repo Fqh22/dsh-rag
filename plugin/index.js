@@ -121,18 +121,30 @@ function readBody(req) {
 }
 
 /** 只允许本机回环访问：面板和 CLI 都在同一台机器上，没有理由放开。 */
+function isLoopbackName(h) {
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '::ffff:127.0.0.1'
+}
+
 function isLoopback(req) {
   const host = String(req.headers.host || '')
   const hostname = host.replace(/:\d+$/, '').replace(/^\[|\]$/g, '')
-  const okHost = hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1'
-  if (!okHost) return false
+  if (!isLoopbackName(hostname)) return false
+  // Host 是客户端可控的请求头。真正的对端地址也要看：万一宿主把监听开出去，
+  // 远端只要伪造 Host 就能过（2026-11-06 审视）。
+  const addr = String((req.socket && req.socket.remoteAddress) || '')
+  if (addr && !isLoopbackName(addr) && !addr.startsWith('127.')) return false
   if (String(req.headers['sec-fetch-site'] || '') === 'cross-site') return false
   const origin = req.headers.origin
-  if (origin) {
+  if (origin && origin !== 'null') {
     try {
       const o = new URL(origin)
-      const oh = o.hostname
-      if (!(oh === '127.0.0.1' || oh === 'localhost' || oh === '::1')) return false
+      // 只有 http(s) 的 Origin 才可比 authority：桌面壳走 dsh-app://，
+      // 它的 Origin 不是 http，靠 Host + 对端地址这两道就够了。
+      if (o.protocol === 'http:' || o.protocol === 'https:') {
+        if (!isLoopbackName(o.hostname)) return false
+        // 端口也要一致，否则任意本地端口的页面都能打这个 API（含 prune）
+        if (o.host !== host) return false
+      }
     } catch (e) {
       return false
     }
@@ -210,15 +222,17 @@ function attachAutoInject(ctx, runCli) {
         if (src.kind !== 'user') return
         const text = textOf(event.data && event.data.content)
         if (!text || text.length < 4) return
-        tries.add(sid)
 
         // 优先从会话对象上直接拿 agent：`agent/created` 触发时 agent 未必已经挂上 session，
         // 靠那张 map 查会一直是空的（第一版就是这么静默失败的）。
         const agent = (session && session.agent) || agents.get(String(sid))
         if (!agent || typeof agent.inject !== 'function') {
+          // 这里**不能**先记 tries：agent 还没挂上只是时序问题，
+          // 后面的用户消息可能就好了。先记会让该会话的自动注入永久失效。
           log(`skip sid=${sid}: agent 不可用（session.agent=${Boolean(session && session.agent)}）`)
           return
         }
+        tries.add(sid)
         agents.set(String(sid), agent)
 
         runCli(['hook', '--text', text.slice(0, 500), '--cwd', String(session.cwd || '')])
@@ -356,7 +370,7 @@ export function apply(ctx) {
     // 缓存/压缩指标：面板顶部那一行「最近 N 会话命中 x%」
     route('/dsh-rag/api/cache', async (req, res) => {
       const sp = new URL(req.url || '/', 'http://x').searchParams
-      const args = ['cache', '--limit', String(Math.min(100, Number(sp.get('limit')) || 20))]
+      const args = ['cache', '--limit', String(Math.max(1, Math.min(100, Number(sp.get('limit')) || 20)))]
       const project = sp.get('project')
       if (project) args.push('--project', project)
       sendJson(res, 200, await runCli(args))
@@ -364,7 +378,7 @@ export function apply(ctx) {
 
     route('/dsh-rag/api/recent', async (req, res) => {
       const sp = new URL(req.url || '/', 'http://x').searchParams
-      const args = ['recent', '--limit', String(Math.min(200, Number(sp.get('limit')) || 40))]
+      const args = ['recent', '--limit', String(Math.max(1, Math.min(200, Number(sp.get('limit')) || 40)))]
       const project = sp.get('project')
       if (project) args.push('--project', project)
       sendJson(res, 200, await runCli(args))
@@ -374,7 +388,7 @@ export function apply(ctx) {
       const sp = new URL(req.url || '/', 'http://x').searchParams
       const q = (sp.get('q') || '').trim()
       if (!q) return sendJson(res, 400, { ok: false, error: '缺少 q' })
-      const args = ['recall', '--query', q, '--limit', String(Math.min(50, Number(sp.get('limit')) || 12))]
+      const args = ['recall', '--query', q, '--limit', String(Math.max(1, Math.min(50, Number(sp.get('limit')) || 12)))]
       const project = sp.get('project')
       if (project) args.push('--project', project)
       sendJson(res, 200, await runCli(args))
@@ -400,16 +414,9 @@ export function apply(ctx) {
     })
 
     route('/dsh-rag/api/remember', async (req, res) => {
-      if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: '只接受 POST' })
-      const body = await readBody(req)
-      const { project, kind, title, content } = body || {}
-      if (!project || !title || !content) {
-        return sendJson(res, 400, { ok: false, error: 'project / title / content 必填' })
-      }
-      sendJson(res, 200, await runCli([
-        'remember', '--project', String(project), '--kind', String(kind || 'fact'),
-        '--title', String(title), '--content', String(content),
-      ]))
+      // 面板目前没有「新建记忆」入口，这个写接口没有调用方。
+      // 少一个可写入口就少一份攻击面：留着等真做了 UI 再开。
+      return sendJson(res, 404, { ok: false, error: '未开放' })
     })
 
     // Web 形态（非桌面壳）走 tapIndex 直接改 HTML，两条路并存、各自防重
