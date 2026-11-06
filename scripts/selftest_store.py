@@ -9,7 +9,6 @@ _iso = tempfile.mkdtemp(prefix="dshrag-selftest-")
 os.environ["DSH_RAG_PROJECTS_ROOT"] = os.path.join(_iso, "projects")
 os.environ["DSH_RAG_HANDOFFS_ROOT"] = os.path.join(_iso, "handoffs")
 os.environ["DSH_RAG_EMBED"] = "off"          # 自测不联网、不花钱
-
 from store import Store, tokenize_zh  # noqa: E402
 
 print("tokenize:", tokenize_zh("搭建RAG记忆库，防止会话过长"))

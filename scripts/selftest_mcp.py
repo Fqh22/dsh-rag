@@ -14,7 +14,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
+# 本机用项目 venv；CI / 别人的机器上可能没有 .venv，退回当前解释器
 PY = ROOT / ".venv" / "Scripts" / "python.exe"
+if not PY.exists():
+    PY = Path(sys.executable)
 
 REQUESTS = [
     {"jsonrpc": "2.0", "id": 1, "method": "initialize",

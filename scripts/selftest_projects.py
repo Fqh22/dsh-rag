@@ -14,6 +14,13 @@ sys.path.insert(0, str(ROOT / "src"))
 
 tmp = Path(tempfile.mkdtemp(prefix="dshrag-proj-"))
 os.environ["DSH_RAG_DB"] = str(tmp / "t.db")
+# 自建 fixture：归一测试不能依赖「本机恰好有个 dsh-rag 目录」，
+# 否则在 CI / 别人的机器上第一条断言就挂。顺带把导出目录也隔离掉。
+FIXTURE_ROOT = tmp / "projects"
+for _d in ("dsh-rag", "my-api-server"):
+    (FIXTURE_ROOT / _d).mkdir(parents=True, exist_ok=True)
+os.environ["DSH_RAG_PROJECTS_ROOT"] = str(FIXTURE_ROOT)
+os.environ["DSH_RAG_HANDOFFS_ROOT"] = str(tmp / "handoffs")
 os.environ["DSH_RAG_EMBED"] = "off"      # 自测不联网、不花钱
 
 import projects as P  # noqa: E402
