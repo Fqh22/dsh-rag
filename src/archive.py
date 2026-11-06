@@ -140,15 +140,18 @@ def _texts(content: Any) -> str:
 
 
 def _known_projects() -> list[str]:
-    """Projects 目录下的真实项目名，作为推断候选。"""
+    """Projects 目录下的真实项目名，作为推断候选。
+
+    借 projects.scan_dirs()：它带 60 秒 TTL，长驻的 MCP 进程里新建项目也能跟上。
+    以前这里是永不过期的进程级缓存，同一进程里加了目录也认不出来。
+    """
     global _PROJECTS_CACHE
     if _PROJECTS_CACHE is None:
         try:
-            _PROJECTS_CACHE = [
-                p.name for p in PROJECTS_ROOT.iterdir()
-                if p.is_dir() and not p.name.startswith(("_", "."))
-            ]
-        except OSError:
+            import projects as projects_mod
+
+            _PROJECTS_CACHE = list(projects_mod.scan_dirs())
+        except Exception:  # noqa: BLE001
             _PROJECTS_CACHE = []
     return _PROJECTS_CACHE
 
@@ -186,7 +189,11 @@ def guess_project(blob: str, cwd: str) -> str:
         return "工作区"
     if tail in ("default-workspace", "deepseek-harness", ""):
         return "工作区"
-    return tail
+    # 只有尾段确实是已登记的项目目录才认；否则归到「工作区」。
+    # 以前无条件 `return tail`，任何子目录/随机路径段都会被造出一个孤儿项目。
+    if tail in _known_projects():
+        return tail
+    return "工作区"
 
 
 def _classify_call(name: str, args: dict[str, Any]) -> dict[str, Any]:
