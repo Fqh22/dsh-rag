@@ -177,7 +177,7 @@ pack 的固定顺序就是为这个设计的：
 需要 Python 3.10+（用系统 Python，或 DSH 自带的运行时都行）。
 
 ```powershell
-git clone <repo-url> dsh-rag
+git clone https://github.com/Fqh22/dsh-rag.git dsh-rag
 cd dsh-rag
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
