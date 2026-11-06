@@ -1,6 +1,6 @@
 {
   "name": "dsh-rag-panel",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "DSH panel for dsh-rag: browse, search and edit per-project memory, plus a session-start pointer to the handoff pack.",
   "type": "module",
   "keywords": [
