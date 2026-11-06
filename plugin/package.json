@@ -1,10 +1,35 @@
 {
   "name": "dsh-rag-panel",
   "version": "0.7.0",
-  "private": true,
+  "description": "DSH panel for dsh-rag: browse, search and edit per-project memory, plus a session-start pointer to the handoff pack.",
   "type": "module",
-  "description": "DeepSeek Harness 项目记忆库面板：浏览各项目的交接卡与记忆条目，支持检索与写入",
-  "keywords": ["dsh", "dsh-plugin", "rag", "memory"],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "rag",
+    "memory",
+    "mcp",
+    "sqlite"
+  ],
+  "homepage": "https://github.com/Fqh22/dsh-rag",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Fqh22/dsh-rag.git",
+    "directory": "plugin"
+  },
+  "bugs": {
+    "url": "https://github.com/Fqh22/dsh-rag/issues"
+  },
+  "author": "Fqh22",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "icon": "./icon.svg",
   "exports": {
     ".": "./index.js",
@@ -18,15 +43,19 @@
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",
-    "icon.svg"
+    "icon.svg",
+    "README.md"
   ],
   "dsh": {
-    "bundle": { "patch": "./cordis.patch.yml" },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "immediately": true,
-      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
     }
-  },
-  "license": "MIT"
+  }
 }

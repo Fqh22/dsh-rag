@@ -9,35 +9,71 @@
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-rag-panel'
 
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url))
-const ROOT = path.resolve(PLUGIN_DIR, '..')
+
+/**
+ * 找到 dsh-rag 仓库根（里面有 src/cli.py）。
+ *
+ * 从 npm 安装时，插件在 `node_modules/dsh-rag-panel/`，上一级不是仓库 ——
+ * 直接 `path.resolve(PLUGIN_DIR, '..')` 会指向 node_modules，CLI 路径全错。
+ * 顺序：DSH_RAG_ROOT → 本地 clone（插件在 <repo>/plugin）→ 常见 clone 位置。
+ */
+function resolveRoot() {
+  const has_cli = (p) => {
+    try {
+      return fs.existsSync(path.join(p, 'src', 'cli.py'))
+    } catch (e) {
+      return false
+    }
+  }
+  const env = process.env.DSH_RAG_ROOT
+  if (env) {
+    const p = path.resolve(env)
+    return has_cli(p) ? p : null
+  }
+  const sibling = path.resolve(PLUGIN_DIR, '..')
+  if (has_cli(sibling)) return sibling
+  for (const guess of [
+    path.join(os.homedir(), 'Documents', 'Projects', 'dsh-rag'),
+    path.join(os.homedir(), 'dsh-rag'),
+  ]) {
+    if (has_cli(guess)) return guess
+  }
+  return null
+}
+
+const ROOT = resolveRoot()
+const ROOT_HINT = '找不到 dsh-rag 仓库：设置环境变量 DSH_RAG_ROOT 指向 clone 的目录（里面应有 src/cli.py），或把仓库放到 ~/Documents/Projects/dsh-rag'
 
 /**
  * 用哪个 Python 跑 cli.py：优先环境变量，其次项目 .venv（Windows / POSIX 两种布局），
  * 最后退回 PATH 里的 python。写死 `.venv\Scripts\python.exe` 时，
  * 换台机器 / Linux / CI 上会直接 ENOENT（2026-11-06 CI 复现）。
  */
-function resolvePython() {
+function resolvePython(root) {
   if (process.env.DSH_RAG_PYTHON) return process.env.DSH_RAG_PYTHON
-  const candidates = process.platform === 'win32'
-    ? [path.join(ROOT, '.venv', 'Scripts', 'python.exe')]
-    : [path.join(ROOT, '.venv', 'bin', 'python3'), path.join(ROOT, '.venv', 'bin', 'python')]
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) return p
-    } catch (e) { /* ignore */ }
+  if (root) {
+    const candidates = process.platform === 'win32'
+      ? [path.join(root, '.venv', 'Scripts', 'python.exe')]
+      : [path.join(root, '.venv', 'bin', 'python3'), path.join(root, '.venv', 'bin', 'python')]
+    for (const p of candidates) {
+      try {
+        if (fs.existsSync(p)) return p
+      } catch (e) { /* ignore */ }
+    }
   }
   return process.platform === 'win32' ? 'python' : 'python3'
 }
 
-const PY = resolvePython()
-const CLI = path.join(ROOT, 'src', 'cli.py')
-const SRC = path.join(ROOT, 'src')
+const PY = resolvePython(ROOT)
+const CLI = ROOT ? path.join(ROOT, 'src', 'cli.py') : null
+const SRC = ROOT ? path.join(ROOT, 'src') : null
 const CLIENT_JS_PATH = path.join(PLUGIN_DIR, 'client.js')
 
 // 桌面壳的 index.html 从安装包静态 dist 直出（dsh-app://），不经过 tapIndex，
@@ -77,6 +113,10 @@ const MAX_BODY = 1024 * 1024
 
 function runCli(args) {
   return new Promise((resolve, reject) => {
+    if (!ROOT || !CLI || !SRC) {
+      reject(new Error(ROOT_HINT))
+      return
+    }
     execFile(
       PY,
       [CLI, ...args],
@@ -195,6 +235,7 @@ function attachAutoInject(ctx, runCli) {
 
   const log = (msg) => {
     try {
+      if (!ROOT) return
       fs.appendFileSync(
         path.join(ROOT, 'logs', 'auto-inject.log'),
         `[${new Date().toISOString()}] ${msg}\n`,

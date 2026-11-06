@@ -198,6 +198,7 @@ python -m venv .venv
 | `DSH_RAG_HANDOFFS_ROOT` | 没有项目目录时，交接卡 md 的导出位置 | `data/handoffs` |
 | `DSH_RAG_EMBED` | 向量后端：`zhipu` / `local` / `off` | `zhipu` |
 | `DSH_RAG_SCAN_SECONDS` | 归档守护的扫描间隔（秒） | `300` |
+| `DSH_RAG_ROOT` | 面板插件去哪里找 Python 仓库（npm 安装时必设） | 自动探测 |
 | `DSH_RAG_PYTHON` | 面板调 CLI 时用的 Python 解释器 | 项目的 `.venv`，找不到就用 `python` |
 
 向量化默认走**智谱 embedding-3**（`https://open.bigmodel.cn/api/paas/v4/embeddings`，1024 维），
@@ -329,15 +330,29 @@ plugin/
 └─ icon.svg
 ```
 
-**装配方式**（desktop profile 生效）：
+**装配方式**（以 desktop profile 为例）：
+
+方式 A —— 从 npm 装（使用者）：
 
 ```powershell
-# 1. 目录联接（把 <repo> 换成本仓库的绝对路径）
+cd $HOME\.dsh\profiles\desktop
+pnpm add dsh-rag-panel
+```
+
+然后把 `dsh-rag-panel` 加进该 profile `package.json` 的 `dsh.profile.bundles`，重启 DSH。
+
+插件会自己找 Python 仓库，顺序是：`DSH_RAG_ROOT` → 插件上级目录 → `~/Documents/Projects/dsh-rag` → `~/dsh-rag`。
+都找不到时面板会显示明确报错（而不是空白），照提示设 `DSH_RAG_ROOT` 即可。
+
+方式 B —— 本地目录联接（改插件代码立刻生效）：
+
+```powershell
+# 把 <repo> 换成本仓库的绝对路径
 New-Item -ItemType Junction `
   -Path  "$HOME\.dsh\profiles\desktop\node_modules\dsh-rag-panel" `
   -Target "<repo>\plugin"
 
-# 2. profile 清单：dependencies 加 link，bundles 加 "dsh-rag-panel"
+# profile 清单：dependencies 加 "dsh-rag-panel": "link:<repo>\plugin"，bundles 加 "dsh-rag-panel"
 #    （改之前先备份 package.json）
 ```
 
