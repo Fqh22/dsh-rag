@@ -503,14 +503,7 @@ def tool_checkpoint_put(args: dict[str, Any]) -> dict[str, Any]:
     mid, created, card_text = store.checkpoint_put(  # type: ignore[union-attr]
         project, patch, session_id=args.get("session_id")
     )
-    try:
-        import embed as embed_mod
-
-        vecs = embed_mod.embed([f"项目状态 {project}\n{card_text}"])
-        if vecs:
-            store.add_vector(mid, vecs[0], embed_mod.MODEL_NAME)  # type: ignore[union-attr]
-    except Exception:  # noqa: BLE001
-        pass
+    # 向量由 store.checkpoint_put 内部重算（reembed=True），这里不再重复调一次
     return _ok(
         f"项目「{project}」状态已{'新建' if created else '更新'}（checkpoint id={mid}），"
         f"交接卡已重渲染（{len(card_text)} 字）。"
@@ -610,14 +603,7 @@ def tool_checkpoint_promote(args: dict[str, Any]) -> dict[str, Any]:
     if not res:
         return _err("采纳失败：草稿已不存在")
     mid, created, card = res
-    try:
-        import embed as embed_mod
-
-        vecs = embed_mod.embed([f"项目状态 {project}\n{card}"])
-        if vecs:
-            store.add_vector(mid, vecs[0], embed_mod.MODEL_NAME)  # type: ignore[union-attr]
-    except Exception:  # noqa: BLE001
-        pass
+    # 向量由 store.promote_draft → checkpoint_put 内部重算，这里不再重复
     return _ok(f"已采纳草稿 #{draft.id}，生成 checkpoint #{mid}，交接卡已重渲染。")
 
 

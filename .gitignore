@@ -22,3 +22,6 @@ Thumbs.db
 
 # 变更记录灌入的本机状态（记录已灌到哪几条，换机器后重建）
 scripts/.ingest_state.json
+
+# 改动前的手工备份（git 本身就是备份，这些不进库）
+*.bak-*

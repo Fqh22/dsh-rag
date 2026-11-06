@@ -37,6 +37,10 @@ CHARS_PER_TOKEN = 1.6
 
 SECTION_ORDER = ("baseline", "facts", "card", "next")
 
+FACTS_HEADER = "## 1 · 长期事实（按时间顺序，不改写）\n"
+# 截断时换一句 header：读者得知道「更早的被省略了」，而不是以为自己看全了
+FACTS_HEADER_TRUNC = "## 1 · 长期事实（按时间顺序，不改写；更早的被省略，用 recall 查）\n"
+
 
 def est_tokens(text: str) -> int:
     return max(1, round(len(text) / CHARS_PER_TOKEN))
@@ -85,6 +89,34 @@ def render_card(project: str, cp: dict[str, Any]) -> str:
     return body or f"（{project} 还没有结构化状态）"
 
 
+def _shrink_facts(section: str, budget: int) -> str:
+    """把事实段收缩到 budget 字符以内：**保留最新的（尾部）**，且只在条目边界切。
+
+    为什么必须从尾部留：facts 按 id 升序传入（旧 → 新），截断取开头等于把
+    最近写的决策/坑全丢掉 —— 那恰恰是开场最需要的东西。2026-11-06 审视时
+    实际踩到：dsh-rag / companion-bot 的 3000 预算只留下 id 2..108 那批最老的。
+    """
+    if not section or budget <= 0:
+        return ""
+    body = section[len(FACTS_HEADER):] if section.startswith(FACTS_HEADER) else section
+    items = [x.strip() for x in body.split("\n\n") if x.strip()]
+    if not items:
+        return ""
+    kept: list[str] = []
+    used = len(FACTS_HEADER_TRUNC)
+    for item in reversed(items):
+        cost = len(item) + 2          # 条目之间用 \n\n 连接
+        if used + cost > budget:
+            break
+        kept.append(item)
+        used += cost
+    if not kept:
+        return ""
+    if len(kept) == len(items):
+        return section              # 一条都没砍，保持原字节（缓存前缀稳定）
+    return FACTS_HEADER_TRUNC + "\n\n".join(reversed(kept)) + "\n\n"
+
+
 def build_pack(
     project: str,
     card: str | None,
@@ -119,7 +151,7 @@ def build_pack(
         else:
             fact_lines.append(f"[{kind}] {title}\n{content}")
     if fact_lines:
-        facts_section = "## 1 · 长期事实（按时间顺序，不改写）\n" + "\n\n".join(fact_lines) + "\n\n"
+        facts_section = FACTS_HEADER + "\n\n".join(fact_lines) + "\n\n"
 
     card_section = ""
     if card and card.strip():
@@ -142,8 +174,9 @@ def build_pack(
         "next": next_section,
     }
 
-    # 先估总量，超预算就按「从后往前丢」的顺序收缩：
-    # next → card 尾部 → facts 尾部。基线永远不砍，它是缓存的地基。
+    # 收缩顺序：next → facts（丢最旧、留最新）→ card（最后才动）。
+    # card 是「现在在干什么」，比任何一条历史事实都重要；以前先砍 card，
+    # 结果两个最活跃项目的 pack 里当前状态整段是空的（2026-11-06 实测）。
     limit_chars = int(budget_tokens * CHARS_PER_TOKEN)
     truncated: list[str] = []
 
@@ -154,20 +187,23 @@ def build_pack(
         sections["next"] = ""
         truncated.append("next")
 
+    if total() > limit_chars and sections["facts"]:
+        # 把预算切给 facts 的部分算出来（总量减去其余各段）
+        budget_for_facts = limit_chars - (total() - len(sections["facts"]))
+        sections["facts"] = _shrink_facts(sections["facts"], budget_for_facts)
+        truncated.append("facts")
+
     if total() > limit_chars and sections["card"]:
         keep = max(0, len(sections["card"]) - (total() - limit_chars))
         if keep > 200:
-            sections["card"] = sections["card"][:keep].rstrip() + "\n…（已截断）\n"
+            sections["card"] = (
+                sections["card"][:keep].rstrip()
+                + "\n…（已截断，完整状态用 checkpoint_get）\n"
+            )
         else:
+            # 只剩基线和卡都超预算时才真的放弃卡
             sections["card"] = ""
         truncated.append("card")
-
-    if total() > limit_chars and sections["facts"]:
-        keep = max(0, len(sections["facts"]) - (total() - limit_chars))
-        sections["facts"] = (
-            (sections["facts"][:keep].rstrip() + "\n…（更早的事实见 recall）\n") if keep > 200 else ""
-        )
-        truncated.append("facts")
 
     text = header + "".join(sections[k] for k in SECTION_ORDER)
     text = text.rstrip() + "\n"

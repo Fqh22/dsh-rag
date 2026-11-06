@@ -147,6 +147,10 @@ def embed(texts: list[str]) -> list[list[float]] | None:
     global _error
     if not texts:
         return []
+    if BACKEND == "off":
+        # 自测 / 离线：完全不发网络请求，检索退回纯关键词。
+        # 自测脚本设 DSH_RAG_EMBED=off，跑起来不花钱也不被网络拖慢。
+        return None
 
     todo: list[str] = []
     keymap: list[str] = []

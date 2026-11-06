@@ -18,11 +18,20 @@ def _env_path(name: str, default: Path) -> Path:
     return default
 
 
+# 本仓库根目录（src/ 的上一级）
+REPO_ROOT: Path = Path(__file__).resolve().parent.parent
+
 # 被记忆的项目都放在这个目录下，一个子目录 = 一个项目
 PROJECTS_ROOT: Path = _env_path(
     "DSH_RAG_PROJECTS_ROOT",
     Path.home() / "Documents" / "Projects",
 )
 
-# 本仓库根目录（src/ 的上一级）
-REPO_ROOT: Path = Path(__file__).resolve().parent.parent
+# 没有项目目录时，交接卡导出的位置。
+# 必须可覆盖：自测用临时库跑，但 put_handoff 会写磁盘 —— 只隔离 DSH_RAG_DB
+# 挡不住它，测试内容会覆盖生产项目的交接卡（2026-11-05 就发生过一次）。
+# 自测一律把 DSH_RAG_PROJECTS_ROOT / DSH_RAG_HANDOFFS_ROOT 指到临时目录。
+HANDOFFS_ROOT: Path = _env_path(
+    "DSH_RAG_HANDOFFS_ROOT",
+    REPO_ROOT / "data" / "handoffs",
+)

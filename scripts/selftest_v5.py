@@ -16,6 +16,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+# 临时库挡不住「写交接卡 md」这个文件系统副作用，三个根都指到临时目录；
+# off 是为了不联网（checkpoint_put 现在会重算向量）。
+_ISO = Path(tempfile.mkdtemp(prefix="dshrag-v5-iso-"))
+os.environ["DSH_RAG_PROJECTS_ROOT"] = str(_ISO / "projects")
+os.environ["DSH_RAG_HANDOFFS_ROOT"] = str(_ISO / "handoffs")
+os.environ["DSH_RAG_EMBED"] = "off"
+
 PASS = 0
 FAIL = 0
 
@@ -133,11 +140,17 @@ def test_checkpoint_and_pack() -> None:
         "SELECT COUNT(*) FROM memories WHERE project='p' AND kind='checkpoint' AND status='active'"
     ).fetchone()[0] == 1)
 
-    cp2 = s.checkpoint_put("p", {"goal": "新目标"})
+    before_id = s.get_checkpoint("p").id
+    s.checkpoint_put("p", {"goal": "新目标"})
     check("部分更新保留旧字段", "技术栈" in s.get_checkpoint("p").meta.get("baseline", ""))
-    check("旧 checkpoint 被 superseded", s._conn.execute(
-        "SELECT COUNT(*) FROM memories WHERE project='p' AND kind='checkpoint' AND status='superseded'"
-    ).fetchone()[0] >= 1)
+    check("checkpoint 原地更新（不再每次新增一行）", s.get_checkpoint("p").id == before_id)
+    check("仍只有一张生效", s._conn.execute(
+        "SELECT COUNT(*) FROM memories WHERE project='p' AND kind='checkpoint' AND status='active'"
+    ).fetchone()[0] == 1)
+
+    # 只改 baseline：卡正文不变，但 meta 必须真的写进去（2026-11-06 前是静默 no-op）
+    s.checkpoint_put("p", {"baseline": "新基线：Python 3.12 + SQLite"})
+    check("单独改 baseline 能生效", "Python 3.12" in s.get_baseline("p"), s.get_baseline("p"))
 
 
 def test_sessions() -> None:

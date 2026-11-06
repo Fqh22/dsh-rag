@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 tmp = Path(tempfile.mkdtemp(prefix="dshrag-proj-"))
 os.environ["DSH_RAG_DB"] = str(tmp / "t.db")
+os.environ["DSH_RAG_EMBED"] = "off"      # 自测不联网、不花钱
 
 import projects as P  # noqa: E402
 from store import Store  # noqa: E402

@@ -14,6 +14,8 @@ SRC = ROOT / "src"
 
 tmp = Path(tempfile.mkdtemp(prefix="dshrag-upd-"))
 os.environ["DSH_RAG_DB"] = str(tmp / "t.db")
+# 这里**不能**设 DSH_RAG_EMBED=off：本测试要验证「改完向量按新内容重算」，
+# 关掉 embedding 就只剩关键词，那两条断言会假失败。
 sys.path.insert(0, str(SRC))
 
 import embed  # noqa: E402

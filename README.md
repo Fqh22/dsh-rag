@@ -199,10 +199,14 @@ python -m venv .venv
 
 想完全离线跑：`set DSH_RAG_EMBED=local`，装 fastembed，然后重建向量。
 
+自测/离线也可以设 `DSH_RAG_EMBED=off`：完全不发网络请求，检索降级为纯关键词。
+`scripts/selftest_*.py` 默认就用它——测试不该花 API 费用，也不该被网络拖慢。
+
 | 后端 | 模型 | 维度 | 依赖 |
 |---|---|---|---|
 | `zhipu`（默认） | embedding-3 | 1024 | 只需联网 + key |
 | `local` | bge-small-zh-v1.5 | 512 | 91MB ONNX 模型，纯 CPU |
+| `off` | — | — | 纯关键词检索，不联网 |
 
 > ⚠️ **换后端必须重建向量**：维度不同，新旧向量混在一起算余弦没有意义。
 > 跑 `.venv\Scripts\python.exe scripts\reembed.py`，它会重建并清掉其它模型的旧向量。

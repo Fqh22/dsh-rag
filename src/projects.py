@@ -132,14 +132,16 @@ def handoff_path(name: str) -> Path:
     """交接卡 md 的落盘位置。
 
     有项目目录 → `Projects\\<名>\\交接卡.md`（人可读、可纳入版本管理）
-    没有 → 退回 `data/handoffs/<名>.md`，保证每个项目都有导出物
+    没有 → 退回 `DSH_RAG_HANDOFFS_ROOT`（默认 data/handoffs），保证每个项目都有导出物
+
+    两条路径都可被环境变量改：自测要用临时库，但导出是文件系统副作用，
+    只隔离数据库挡不住它（见 paths.HANDOFFS_ROOT 的注释）。
     """
-    root = Path(__file__).resolve().parent.parent
     d = project_dir(name)
     if d is not None:
         return d / "交接卡.md"
     safe = re.sub(r"[\\/:*?\"<>|]", "_", name) or "未命名"
-    return root / "data" / "handoffs" / f"{safe}.md"
+    return paths.HANDOFFS_ROOT / f"{safe}.md"
 
 
 def write_handoff_md(name: str, content: str, updated_at: str) -> tuple[bool, str]:

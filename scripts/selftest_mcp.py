@@ -66,6 +66,11 @@ def main() -> int:
     env["PYTHONPATH"] = str(SRC)
     # 用临时库跑，绝不污染正式记忆
     env["DSH_RAG_DB"] = str(tmp / "selftest.db")
+    # 库是临时的不够：handoff_put / checkpoint_put 还会把卡导出成 md，
+    # 路径来自这两个根。不隔离就会写进 Projects\<项目>\交接卡.md。
+    env["DSH_RAG_PROJECTS_ROOT"] = str(tmp / "projects")
+    env["DSH_RAG_HANDOFFS_ROOT"] = str(tmp / "handoffs")
+    env["DSH_RAG_EMBED"] = "off"      # 自测不联网、不花钱
 
     with open(req, "r", encoding="utf-8") as fin, open(out, "w", encoding="utf-8") as fout:
         proc = subprocess.run(

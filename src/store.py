@@ -347,11 +347,18 @@ class Store:
         session_id: str | None = None,
         source: str = "manual",
         render_handoff: bool = True,
+        reembed: bool = True,
     ) -> tuple[int, bool, str]:
         """写入/合并结构化状态。
 
         `patch` 里的字段与当前 checkpoint 合并（列表整体替换、字符串覆盖），
         然后渲染成交接卡。返回 (id, 是否新建, 渲染出的卡正文)。
+
+        **不能复用 remember() 的去重路径**：它的 hash 只看 project/title/content，
+        而 render_card 不渲染 baseline —— 只改 baseline 时卡逐字节不变，会命中
+        旧行、meta 不更新，调用方却以为成功了（2026-11-06 实测）。baseline 是
+        缓存前缀的地基，必须真的能改。所以这里按「当前 active checkpoint」原地
+        更新：内容没变也照样写 meta，不再每次新增一行。
         """
         project = self.normalize_project(project)
         prev = self.get_checkpoint(project)
@@ -362,28 +369,67 @@ class Store:
         for key in ("done", "doing", "next", "decisions", "pitfalls", "open_questions", "files"):
             if key in patch and patch[key] is not None:
                 meta[key] = list(patch[key])
-        meta["updated_at"] = now_iso()
+        ts = now_iso()
+        meta["updated_at"] = ts
 
+        title = "项目状态"
         card_text = card_mod.render_card(project, meta)
+        meta_json = json.dumps(meta, ensure_ascii=False, sort_keys=True)
+
         with self._lock:
-            mid, created = self.remember(
-                project, "checkpoint", "项目状态", card_text,
-                session_id=session_id, source=source,
-                meta=meta,
-            )
+            created = prev is None
+            body_changed = False
             if created:
-                self._conn.execute(
-                    "UPDATE memories SET status='superseded', superseded_by=?, updated_at=? "
-                    "WHERE project=? AND kind='checkpoint' AND status='active' AND id != ?",
-                    (mid, now_iso(), project, mid),
+                mid, _ = self.remember(
+                    project, "checkpoint", title, card_text,
+                    session_id=session_id, source=source, meta=meta,
                 )
-                # 人工/模型确认过状态后，草稿就没有存在意义了
-                self._conn.execute(
-                    "UPDATE memories SET status='superseded', updated_at=? "
-                    "WHERE project=? AND kind='checkpoint' AND status='draft'",
-                    (now_iso(), project),
-                )
-                self._conn.commit()
+            else:
+                mid = prev.id
+                new_hash = self._hash(project, title, card_text)
+                # content_hash 全库唯一：同样内容若被别的记忆占了（极罕见），
+                # 退化成把那条复用成 checkpoint，而不是硬写一个重复 hash。
+                dup = self._conn.execute(
+                    "SELECT id FROM memories WHERE content_hash = ? AND id != ?",
+                    (new_hash, mid),
+                ).fetchone()
+                if dup:
+                    mid = int(dup["id"])
+                    self._conn.execute(
+                        "UPDATE memories SET status='active', meta_json=?, updated_at=? WHERE id=?",
+                        (meta_json, ts, mid),
+                    )
+                    body_changed = True
+                else:
+                    body_changed = (prev.content or "") != card_text
+                    self._conn.execute(
+                        "UPDATE memories SET content=?, content_hash=?, meta_json=?, "
+                        "status='active', updated_at=?, source=? WHERE id=?",
+                        (card_text, new_hash, meta_json, ts, source, mid),
+                    )
+                    if body_changed:
+                        self._fts_put(mid, title, card_text)
+                self._touch_project(project, ts)
+
+            # 一个项目只留一张生效 checkpoint；人工确认过状态后草稿就没意义了
+            self._conn.execute(
+                "UPDATE memories SET status='superseded', superseded_by=?, updated_at=? "
+                "WHERE project=? AND kind='checkpoint' AND status='active' AND id != ?",
+                (mid, ts, project, mid),
+            )
+            self._conn.execute(
+                "UPDATE memories SET status='superseded', updated_at=? "
+                "WHERE project=? AND kind='checkpoint' AND status='draft'",
+                (ts, project),
+            )
+            self._conn.commit()
+            if body_changed:
+                self._invalidate_vec_cache()
+
+        if reembed:
+            # 内容变了、甚至只是重建了同一行，向量都得跟上；
+            # 否则语义检索会按旧内容把这条召回来。
+            self._reembed(mid, title, card_text)
         if render_handoff:
             self.put_handoff(
                 project, card_text, session_id=session_id,
@@ -614,17 +660,24 @@ class Store:
             self._invalidate_vec_cache()
 
         if reembed:
-            try:
-                import embed  # 延迟导入：纯文本修改时不必付这份开销
-
-                vecs = embed.embed([f"{new_title}\n{new_content}"])
-                if vecs:
-                    self.add_vector(int(memory_id), vecs[0], embed.MODEL_NAME)
-            except Exception:  # noqa: BLE001
-                # 向量没更新不影响内容修改成功；下次重建会补上
-                pass
+            self._reembed(int(memory_id), new_title, new_content)
 
         return True, "已更新"
+
+    def _reembed(self, memory_id: int, title: str, content: str) -> None:
+        """重算一条记忆的向量。
+
+        失败不算错：关键词检索仍然可用，下次 reembed/backfill 会补上。
+        所有「改了正文」的路径都该走这里，漏一个就会「改了还按旧内容召回」。
+        """
+        try:
+            import embed  # 延迟导入：纯文本操作不必付这份开销
+
+            vecs = embed.embed([f"{title}\n{content}"])
+            if vecs:
+                self.add_vector(int(memory_id), vecs[0], embed.MODEL_NAME)
+        except Exception:  # noqa: BLE001
+            pass
 
     def get_memory(self, memory_id: int) -> Memory | None:
         with self._lock:
@@ -741,6 +794,10 @@ class Store:
     ) -> list[Memory]:
         """混合检索：关键词 + 向量，RRF 融合，项目隔离。"""
         limit = max(1, min(int(limit), 50))
+        # 写入侧永远归一（DSH-RAG → dsh-rag），查询侧不归一就会静默 0 条：
+        # 模型以为「没有历史」，比报错还难查。2026-11-06 实测。
+        if project:
+            project = self.normalize_project(project)
         # 候选池要比 limit 大：重排会按类型限流，池子太小就没得挑，
         # 结果还是被日志型记忆填满（实测 limit=8 时池子只有 16 条。
         pool = max(limit * 3, 24)

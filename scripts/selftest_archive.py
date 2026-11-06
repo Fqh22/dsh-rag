@@ -6,6 +6,7 @@ for suf in ("", "-wal", "-shm"):
     try: os.remove(tmp + suf)
     except OSError: pass
 os.environ["DSH_RAG_DB"] = tmp
+os.environ["DSH_RAG_EMBED"] = "off"      # 自测不联网、不花钱
 import importlib, store, archive, embed
 importlib.reload(store)
 s = store.Store(tmp)

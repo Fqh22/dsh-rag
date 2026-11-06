@@ -1,7 +1,16 @@
 import sys, tempfile, os
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from store import Store, tokenize_zh
+
+# 隔离：临时库只能隔离数据库。put_handoff 会写磁盘，而导出路径来自
+# PROJECTS_ROOT / HANDOFFS_ROOT —— 不隔离它会覆盖生产项目的交接卡
+# （2026-11-05 就发生过：dsh-rag/交接卡.md 被测试字符串盖掉了）。
+_iso = tempfile.mkdtemp(prefix="dshrag-selftest-")
+os.environ["DSH_RAG_PROJECTS_ROOT"] = os.path.join(_iso, "projects")
+os.environ["DSH_RAG_HANDOFFS_ROOT"] = os.path.join(_iso, "handoffs")
+os.environ["DSH_RAG_EMBED"] = "off"          # 自测不联网、不花钱
+
+from store import Store, tokenize_zh  # noqa: E402
 
 print("tokenize:", tokenize_zh("搭建RAG记忆库，防止会话过长"))
 

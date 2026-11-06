@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 import tempfile
@@ -13,6 +14,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
+
+# 同 selftest_store：临时库挡不住「写交接卡 md」这个文件系统副作用（v6 的
+# checkpoint_put 会导出 data/handoffs/p.md），所以把三个根都指到临时目录。
+_ISO = Path(tempfile.mkdtemp(prefix="dshrag-v6-iso-"))
+os.environ["DSH_RAG_PROJECTS_ROOT"] = str(_ISO / "projects")
+os.environ["DSH_RAG_HANDOFFS_ROOT"] = str(_ISO / "handoffs")
+os.environ["DSH_RAG_EMBED"] = "off"
 
 PASS = 0
 FAIL = 0
