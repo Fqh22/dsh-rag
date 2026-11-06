@@ -1,10 +1,19 @@
 name: publish
 
-# 打 tag 时把 plugin/ 发到 npm。需要仓库 secret: NPM_TOKEN
-# （npmjs.com → Access Tokens → Generate New Token → Automation）
+# 打 tag 时把 plugin/ 发到 npm。
+#
+# 认证走 **Trusted Publishing（OIDC）**，不再需要 NPM_TOKEN：
+#   npm 包设置里配好 trusted publisher（GitHub Actions / Fqh22/dsh-rag / publish.yml）
+#   之后，这里只需要 id-token: write，npm 会用 OIDC 换一次性凭证。
+# 备用：如果 OIDC 没配，可以临时加回 NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}。
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   npm:
@@ -14,18 +23,18 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # npm 11.5+ 才支持 trusted publishing，node 24 自带
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
       - name: check tag matches plugin version
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
           TAG="${GITHUB_REF#refs/tags/v}"
           PKG=$(node -p "require('./plugin/package.json').version")
           echo "tag=$TAG package=$PKG"
           test "$TAG" = "$PKG" || { echo "::error::tag 与 plugin/package.json 版本不一致"; exit 1; }
 
-      - name: publish to npm
+      - name: publish to npm (trusted publishing)
         working-directory: plugin
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
