@@ -364,14 +364,22 @@ def main() -> int:
     elif args.cmd == "hook":
         # 会话开场钩子：只回答「这句话像不像在说某个已登记的项目」，
         # 不写库、不注入，由插件决定要不要把结果塞进 inbox。
+        #
+        # 2026-11-05 改：保留名（工作区/未归类）以前一律不匹配，理由是「零散会话」。
+        # 实测 26 个会话里 25 个都是从 default-workspace 发起、9357 步全在这里，
+        # 于是自动注入对用户真正的主战场全程失效（auto-inject.log 全是 unmatched）。
+        # 现在保留名也走同一套判断：只要真有交接卡或 checkpoint，就照常给指针。
+        # 副作用可控——没有卡时依旧不注入，不会平白多付 token。
         import archive
 
         text = args.text or ""
         project = s.normalize_project(archive.guess_project(text, args.cwd or ""))
-        if project in ("工作区", "未归类") or len(text.strip()) < 4:
+        # 预算要和模型真正读的包一致（默认 3000）。用 400 时事实会挤占全部预算，
+        # 交接卡被截成 0 token，报出去的 packVersion/packTokens 也就对不上了。
+        pack = s.handoff_pack(project)
+        if len(text.strip()) < 4 or not (pack.get("hasHandoff") or pack.get("checkpoint")):
             emit({"ok": True, "matched": False})
         else:
-            pack = s.handoff_pack(project, budget_tokens=400)
             emit({
                 "ok": True,
                 "matched": True,
