@@ -303,6 +303,11 @@ python -m venv .venv
 
 界面上有个右下角悬浮按钮（带条目数角标），点开是记忆库面板。
 
+> **插件市场里已经能搜到**：在 DSH 的 **Plugins → Discover**（或 dshmarket 面板）搜 `dsh-rag`，
+> 条目是 `Fqh22/dsh-rag#plugin`，分类 *Memory*，收录于
+> [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)（[详情页](https://awesome-dsh-plugin.com/p/Fqh22/dsh-rag--plugin/)）。
+> 市场里一键装的是面板插件；Python 侧的记忆服务仍需按上面「接入 DSH」配一次。
+
 **能做什么**
 
 | 操作 | 怎么用 |
