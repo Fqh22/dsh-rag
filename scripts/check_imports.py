@@ -23,7 +23,8 @@ ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 
 # 通用引擎的地基：期望它们零内部依赖
-CORE = ("paths", "schema", "card", "embed", "engine")
+# embed 不在这里：它依赖 platform_info（读密钥），属于「基础设施」而非最底层。
+CORE = ("paths", "schema", "card", "platform_info", "engine")
 
 # 已知的越界依赖：(from, to) -> 为什么留着、什么时候修
 # 目前是空的——P2 把 store→pages 收掉之后，边界是干净的。

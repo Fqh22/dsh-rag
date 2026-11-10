@@ -39,6 +39,7 @@ jobs:
           python scripts/selftest_archive.py
           python scripts/selftest_projects.py
           python scripts/selftest_mcp.py
+          python scripts/selftest_http.py
 
   plugin:
     runs-on: ubuntu-latest

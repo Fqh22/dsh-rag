@@ -670,14 +670,19 @@ def send(obj: dict[str, Any]) -> None:
     sys.stdout.flush()
 
 
-def handle(req: dict[str, Any]) -> None:
+def dispatch(req: dict[str, Any]) -> dict[str, Any] | None:
+    """处理一条 JSON-RPC 请求，返回响应对象；通知返回 None。
+
+    传输层（stdio / HTTP）只负责读写，协议分派全在这里——两条通道共用同一份逻辑，
+    否则迟早会出现「stdio 能跑、HTTP 少个分支」。
+    """
     method = req.get("method")
     rid = req.get("id")
     params = req.get("params") or {}
 
     if method == "initialize":
         client_version = params.get("protocolVersion") or DEFAULT_PROTOCOL
-        send({
+        return {
             "jsonrpc": "2.0",
             "id": rid,
             "result": {
@@ -692,40 +697,120 @@ def handle(req: dict[str, Any]) -> None:
                     "缓存用 cache_stats 看，健康度用 doctor 看，旧信息该收的用 cleanup 看计划。"
                 ),
             },
-        })
-        return
+        }
 
     if method in ("notifications/initialized", "initialized", "notifications/cancelled"):
-        return
+        return None
 
     if method == "ping":
-        send({"jsonrpc": "2.0", "id": rid, "result": {}})
-        return
+        return {"jsonrpc": "2.0", "id": rid, "result": {}}
 
     if method == "tools/list":
-        send({"jsonrpc": "2.0", "id": rid, "result": {"tools": TOOLS}})
-        return
+        return {"jsonrpc": "2.0", "id": rid, "result": {"tools": TOOLS}}
 
     if method == "tools/call":
         name = params.get("name")
         args = params.get("arguments") or {}
         handler = HANDLERS.get(name)
         if handler is None:
-            send({"jsonrpc": "2.0", "id": rid,
-                  "error": {"code": -32601, "message": f"未知工具: {name}"}})
-            return
+            return {"jsonrpc": "2.0", "id": rid,
+                    "error": {"code": -32601, "message": f"未知工具: {name}"}}
         try:
             result = handler(args)
         except Exception as exc:  # noqa: BLE001
             log(traceback.format_exc())
             result = _err(f"工具执行失败: {type(exc).__name__}: {exc}")
-        send({"jsonrpc": "2.0", "id": rid, "result": result})
-        return
+        return {"jsonrpc": "2.0", "id": rid, "result": result}
 
     # 未识别的方法：有 id 才回错误，通知类静默
     if rid is not None:
-        send({"jsonrpc": "2.0", "id": rid,
-              "error": {"code": -32601, "message": f"未实现的方法: {method}"}})
+        return {"jsonrpc": "2.0", "id": rid,
+                "error": {"code": -32601, "message": f"未实现的方法: {method}"}}
+    return None
+
+
+def handle(req: dict[str, Any]) -> None:
+    """stdio 通道：写回一行响应。"""
+    resp = dispatch(req)
+    if resp is not None:
+        send(resp)
+
+
+# --------------------------------------------------------------- HTTP 通道
+def serve_http(host: str, port: int) -> None:
+    """stateless HTTP：POST /mcp 收发 JSON-RPC，GET /healthz 探活。
+
+    刻意**不做 SSE**：那需要会话管理与断线重连，先把「远程/多 host 能连上」这张
+    门票拿到。传输层本身不鉴权，只提供回环绑定——要暴露到局域网请自己加反代。
+    """
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, fmt: str, *args: Any) -> None:  # noqa: D401
+            log("http " + (fmt % args))
+
+        def _json(self, code: int, obj: Any) -> None:
+            body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.rstrip("/") == "/healthz":
+                self._json(200, {
+                    "ok": True,
+                    "server": SERVER_NAME,
+                    "version": SERVER_VERSION,
+                    "db": str(DB_PATH),
+                })
+                return
+            self._json(404, {"ok": False, "error": "not found"})
+
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path.rstrip("/") not in ("/mcp", ""):
+                self._json(404, {"ok": False, "error": "not found"})
+                return
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                n = 0
+            raw = self.rfile.read(n) if n else b""
+            try:
+                req = json.loads(raw or b"null")
+            except json.JSONDecodeError:
+                self._json(400, {"jsonrpc": "2.0", "id": None,
+                                 "error": {"code": -32700, "message": "Parse error"}})
+                return
+            if not isinstance(req, (dict, list)):
+                self._json(400, {"jsonrpc": "2.0", "id": None,
+                                 "error": {"code": -32600, "message": "Invalid Request"}})
+                return
+            if isinstance(req, list) and not all(isinstance(x, dict) for x in req):
+                self._json(400, {"jsonrpc": "2.0", "id": None,
+                                 "error": {"code": -32600, "message": "Invalid Request"}})
+                return
+            try:
+                if isinstance(req, list):
+                    out = [r for r in (dispatch(x) for x in req) if r is not None]
+                    self._json(200, out)
+                else:
+                    resp = dispatch(req)
+                    if resp is None:
+                        self._json(202, {"ok": True})
+                    else:
+                        self._json(200, resp)
+            except Exception as exc:  # noqa: BLE001
+                log(traceback.format_exc())
+                self._json(500, {"jsonrpc": "2.0", "id": None,
+                                 "error": {"code": -32603, "message": str(exc)}})
+
+    srv = ThreadingHTTPServer((host, port), Handler)
+    log(f"http ready on http://{host}:{port}/mcp")
+    srv.serve_forever()
 
 
 def _startup_archive() -> None:
@@ -773,6 +858,16 @@ def _warn_missing_vectors() -> None:
         log("缺向量自检失败:\n" + traceback.format_exc())
 
 
+def _http_addr(argv: list[str]) -> str | None:
+    """只认 `--http host:port` / `--http=host:port`，其余参数忽略（stdio 模式不读参数）。"""
+    for i, a in enumerate(argv):
+        if a == "--http" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--http="):
+            return a.split("=", 1)[1]
+    return None
+
+
 def main() -> None:
     global store
     import os
@@ -787,6 +882,21 @@ def main() -> None:
     _warn_missing_vectors()
     if (os.environ.get("DSH_RAG_STARTUP_ARCHIVE") or "1") != "0":
         _startup_archive()
+
+    addr = _http_addr(sys.argv[1:])
+    if addr:
+        host, _, port_s = addr.rpartition(":")
+        try:
+            port = int(port_s)
+        except ValueError:
+            log(f"非法 --http 地址：{addr}（示例：--http 127.0.0.1:8765）")
+            raise SystemExit(2)
+        host = host or "127.0.0.1"
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            log(f"警告：HTTP 绑定到非回环地址 {host}，传输层没有鉴权，建议自己套反向代理")
+        serve_http(host, port)
+        return
+
     for line in sys.stdin:
         line = line.strip()
         if not line:

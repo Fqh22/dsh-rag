@@ -299,6 +299,23 @@ python -m venv .venv
 > ⚠️ **profile 别写错**：DSH Web GUI 读 `profiles/web/cordis.patch.yml`，桌面端读 `profiles/desktop/`。
 > 两处现在都配了；只配桌面端时 Web 界面上是看不到 `mcp__rag__*` 的（踩过）。
 
+### HTTP 模式（远程 / 多 host）
+
+stdio 之外还有一个 **stateless HTTP** 通道，给不能起子进程的 host 用：
+
+```powershell
+.venv\Scripts\python.exe src\server.py --http 127.0.0.1:8765
+```
+
+| 端点 | 用途 |
+|---|---|
+| `POST /mcp` | JSON-RPC 2.0（单条或批量），无会话状态，每条请求独立 |
+| `GET /healthz` | 探活：返回 `server` / `version` / `db` |
+
+- **没有鉴权**：传输层只负责收发，默认绑回环。要暴露到局域网，请自己套反向代理并加认证。
+- **不做 SSE**：会话管理与断线重连留给以后；现在只解决「远程/多 host 能连上」。
+- stdio 与 HTTP 共用同一份 `dispatch()`，不存在「一条通道能跑、另一条少个分支」。
+
 ---
 
 ## 可视化面板（Web 插件）

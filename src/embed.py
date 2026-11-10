@@ -20,6 +20,8 @@ import urllib.request
 from collections import OrderedDict
 from pathlib import Path
 
+import platform_info
+
 ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = ROOT / "data" / "models"
 
@@ -62,52 +64,27 @@ def error() -> str | None:
 
 
 # ------------------------------------------------------------------ key 解析
-def _read_registry() -> str | None:
-    """DSH 桌面端是登录时启动的，未必继承后来设置的用户环境变量，所以回退到注册表。"""
-    try:
-        import winreg
-    except ImportError:
-        return None
-    names = ("ZHIPUAI_API_KEY", "ZHIPU_API_KEY", "BIGMODEL_API_KEY")
-    for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
-        try:
-            key = winreg.OpenKey(root, r"Environment")
-        except OSError:
-            continue
-        for name in names:
-            try:
-                val, _ = winreg.QueryValueEx(key, name)
-                if val and str(val).strip():
-                    return str(val).strip()
-            except OSError:
-                continue
-    return None
-
-
 _KEY: str | None = None
+_KEY_NAMES = ("ZHIPUAI_API_KEY", "ZHIPU_API_KEY", "BIGMODEL_API_KEY")
 
 
 def get_key() -> str | None:
+    """密钥来源收在 platform_info 里：环境变量 → 平台存储 → data/.zhipu_key。
+
+    以前这里自己碰 winreg，等于把 Windows 假设写进了向量层；换到 Linux 时
+    那段代码不会报错，只会永远返回 None。
+    """
     global _KEY, _error
     if _KEY:
         return _KEY
-    for name in ("ZHIPUAI_API_KEY", "ZHIPU_API_KEY", "BIGMODEL_API_KEY"):
-        v = os.environ.get(name)
-        if v and v.strip():
-            _KEY = v.strip()
-            return _KEY
-    v = _read_registry()
-    if v:
-        _KEY = v
+    _KEY = platform_info.get_secret(*_KEY_NAMES, fallback_file=ROOT / "data" / ".zhipu_key")
+    if _KEY:
         return _KEY
-    f = ROOT / "data" / ".zhipu_key"
-    if f.is_file():
-        try:
-            _KEY = f.read_text(encoding="utf-8").strip()
-            return _KEY
-        except OSError:
-            pass
-    _error = "找不到智谱 API key（环境变量 / 注册表 / data/.zhipu_key 都没有）"
+    _error = (
+        "找不到智谱 API key（找过："
+        + "、".join(platform_info.describe_sources(*_KEY_NAMES))
+        + "、data/.zhipu_key）"
+    )
     return None
 
 
