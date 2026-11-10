@@ -22,8 +22,12 @@ jobs:
       - name: install deps
         run: pip install -r requirements.txt
 
+      - name: import boundaries
+        run: python scripts/check_imports.py
+
       - name: selftests (offline, temp db)
         run: |
+          python scripts/selftest_contracts.py
           python scripts/selftest_pack.py
           python scripts/selftest_v5.py
           python scripts/selftest_v6.py
