@@ -32,6 +32,8 @@ def to_record(memory: Any) -> MemoryRecord | None:
         session_id=memory.session_id,
         meta=dict(memory.meta or {}),
         score=float(getattr(memory, "score", 0.0) or 0.0),
+        use_count=int(getattr(memory, "use_count", 0) or 0),
+        last_used_at=getattr(memory, "last_used_at", None),
     )
 
 
@@ -87,6 +89,32 @@ class SqliteRepository:
 
     def recent(self, namespace: str | None = None, *, limit: int = 20) -> list[MemoryRecord]:
         return [to_record(m) for m in self._store.recent(namespace, limit)]  # type: ignore[misc]
+
+    def scan(
+        self,
+        *,
+        kinds: list[str] | None = None,
+        status: str | None = "active",
+        namespace: str | None = None,
+    ) -> list[MemoryRecord]:
+        """按 kind/status 列出记忆。生命周期规则（cleanup）用它，不做相关性排序。"""
+        from store import Memory
+
+        sql = "SELECT * FROM memories WHERE 1=1"
+        params: list[Any] = []
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        if namespace:
+            sql += " AND project = ?"
+            params.append(self._store.normalize_project(namespace))
+        if kinds:
+            sql += f" AND kind IN ({','.join('?' * len(kinds))})"
+            params.extend(kinds)
+        sql += " ORDER BY project, id DESC"
+        with self._store._lock:
+            rows = self._store._conn.execute(sql, params).fetchall()
+        return [to_record(Memory.from_row(r)) for r in rows]  # type: ignore[misc]
 
     def stats(self) -> dict[str, Any]:
         return self._store.stats()

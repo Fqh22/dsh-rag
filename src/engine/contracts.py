@@ -83,6 +83,9 @@ class MemoryRecord:
     session_id: str | None = None
     meta: dict[str, Any] = field(default_factory=dict)
     score: float = 0.0
+    # 生命周期规则（cleanup）要用，不是展示字段
+    use_count: int = 0
+    last_used_at: str | None = None
 
 
 @runtime_checkable
@@ -134,6 +137,15 @@ class Repository(Protocol):
         limit: int = 20,
     ) -> list[MemoryRecord]:
         """最近写入的生效记忆。"""
+
+    def scan(
+        self,
+        *,
+        kinds: list[str] | None = None,
+        status: str | None = "active",
+        namespace: str | None = None,
+    ) -> list[MemoryRecord]:
+        """按 kind / status 列出记忆（不做相关性排序）。生命周期规则用它。"""
 
     def stats(self) -> dict[str, Any]:
         """条数、向量覆盖、结构版本等。"""

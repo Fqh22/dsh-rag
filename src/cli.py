@@ -337,6 +337,7 @@ def main() -> int:
     elif args.cmd == "pages":
         import pages as pages_mod
 
+        pages_mod.ensure(s)          # 页面层按需装配
         conn = s._conn
         if args.dir:
             res = pages_mod.ingest_dir(conn, Path(args.dir),

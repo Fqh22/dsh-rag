@@ -86,6 +86,13 @@ class FakeRepository:
                 if (namespace is None or r.namespace == namespace) and r.status == "active"]
         return rows[-limit:]
 
+    def scan(self, *, kinds=None, status="active", namespace=None):
+        rows = [r for r in self._rows.values()
+                if (status is None or r.status == status)
+                and (namespace is None or r.namespace == namespace)
+                and (not kinds or r.kind in kinds)]
+        return sorted(rows, key=lambda r: (r.namespace, -r.id))
+
     def stats(self):
         return {"total": len(self._rows), "active": sum(1 for r in self._rows.values() if r.status == "active")}
 

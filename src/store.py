@@ -154,13 +154,8 @@ class Store:
         # 时后到的写入直接报 database is locked，不是数据问题，等一会儿就过去了。
         self._conn.execute("PRAGMA busy_timeout=5000")
         self.migration = schema.ensure(self._conn, self.db_path)
-        # 页面层（长文档的目录 + 块）建表是纯增量，不碰 memories
-        try:
-            import pages as pages_mod
-
-            pages_mod.ensure_tables(self._conn)
-        except Exception as e:  # noqa: BLE001
-            print(f"[store] pages 建表失败：{e}")
+        # 页面层（长文档）是可选的独立子系统：**不由 store 兜底建表**，
+        # 由真正用到它的入口调用 pages.ensure(store)（P2 拆层）。
         self._vec_cache: tuple[str, np.ndarray, list[int]] | None = None
         # 最近一次危险操作（删项目）留下的备份路径，给 CLI / 面板回显用
         self.last_backup: str | None = None

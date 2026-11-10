@@ -616,6 +616,7 @@ def tool_pages_search(args: dict[str, Any]) -> dict[str, Any]:
 
     # 同一连接会被 startup-archive 线程使用，读也要拿锁
     with store._lock:  # type: ignore[union-attr]
+        pages_mod.ensure(store)      # 页面层按需装配
         conn = store._conn
         hits = pages_mod.search_chunks(conn, q, args.get("project") or None,
                                        int(args.get("limit") or 3))
@@ -633,6 +634,7 @@ def tool_pages_index(args: dict[str, Any]) -> dict[str, Any]:
     import pages as pages_mod
 
     with store._lock:  # type: ignore[union-attr]
+        pages_mod.ensure(store)      # 页面层按需装配
         conn = store._conn
         rows = pages_mod.index_list(conn, args.get("project") or None,
                                     int(args.get("limit") or 40))

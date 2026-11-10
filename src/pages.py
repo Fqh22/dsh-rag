@@ -184,6 +184,15 @@ def ensure_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def ensure(store) -> None:
+    """宿主用的装配入口：按需建表（幂等）。
+
+    放在 pages 自己这边，而不是 store.__init__ 里——页面层是可选的独立子系统，
+    存储层不该知道它存在（P2 拆层，scripts/check_imports.py 会盯着）。
+    """
+    ensure_tables(store._conn)
+
+
 # ---------------------------------------------------------------- 写入
 def ingest_file(conn: sqlite3.Connection, path: Path, project: str,
                 source: str = "doc", force: bool = False) -> tuple[int, int, bool]:

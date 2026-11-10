@@ -55,77 +55,69 @@ def _has_checkpoint(conn: sqlite3.Connection, project: str) -> bool:
 
 
 def plan(store, **overrides: Any) -> dict[str, Any]:
-    """算出候选，不写库。返回 {candidates, stats}。"""
+    """算出候选，不写库。返回 {candidates, stats}。
+
+    只读路径走 Repository 协议（P2）：不再直接碰 `store._conn`，这样生命周期规则
+    可以脱离 SQLite 复用。写入路径（apply / purge）仍在存储层内部完成。
+    """
+    from adapters.repository import for_store
+
     policy = dict(DEFAULT_POLICY)
     policy.update({k: v for k, v in overrides.items() if v is not None})
-    conn = store._conn
+    repo = for_store(store)
     candidates: list[dict[str, Any]] = []
 
-    def add(row, reason: str, detail: str) -> None:
+    def add(rec, reason: str, detail: str) -> None:
         candidates.append({
-            "id": int(row["id"]),
-            "project": row["project"],
-            "kind": row["kind"],
-            "status": row["status"],
-            "title": row["title"],
-            "chars": len(row["content"] or ""),
-            "created_at": row["created_at"],
-            "ageDays": round(_age_days(row["created_at"]) or 0, 1),
-            "useCount": int(row["use_count"] or 0),
+            "id": int(rec.id),
+            "project": rec.namespace,
+            "kind": rec.kind,
+            "status": rec.status,
+            "title": rec.title,
+            "chars": len(rec.content or ""),
+            "created_at": rec.created_at,
+            "ageDays": round(_age_days(rec.created_at) or 0, 1),
+            "useCount": int(rec.use_count or 0),
             "reason": reason,
             "detail": detail,
         })
 
-    with store._lock:
-        # 1) 会话摘要：先用"项目已有 checkpoint"降级，再用硬时限兜底
-        rows = conn.execute(
-            "SELECT * FROM memories WHERE kind='session' AND status='active'"
-        ).fetchall()
-        for r in rows:
-            age = _age_days(r["created_at"]) or 0
-            if age >= policy["hard_days"]:
-                add(r, "session-old", f"{age:.0f} 天前的会话摘要")
-            elif age >= policy["session_days"] and _has_checkpoint(conn, r["project"]):
-                add(r, "session-stale", f"{age:.0f} 天前，且项目已有 checkpoint")
+    # 1) 会话摘要：先用"项目已有 checkpoint"降级，再用硬时限兜底
+    cp_projects = {r.namespace for r in repo.scan(kinds=["checkpoint"], status="active")}
+    for r in repo.scan(kinds=["session"], status="active"):
+        age = _age_days(r.created_at) or 0
+        if age >= policy["hard_days"]:
+            add(r, "session-old", f"{age:.0f} 天前的会话摘要")
+        elif age >= policy["session_days"] and r.namespace in cp_projects:
+            add(r, "session-stale", f"{age:.0f} 天前，且项目已有 checkpoint")
 
-        # 2) 失效交接卡：每项目只留最近 N 张
-        rows = conn.execute(
-            "SELECT * FROM memories WHERE kind='handoff' AND status='superseded' "
-            "ORDER BY project, id DESC"
-        ).fetchall()
-        seen: dict[str, int] = {}
-        for r in rows:
-            seen[r["project"]] = seen.get(r["project"], 0) + 1
-            if seen[r["project"]] > policy["keep_handoffs"]:
-                add(r, "handoff-history", f"第 {seen[r['project']]} 张失效卡（保留最近 {policy['keep_handoffs']} 张）")
+    # 2) 失效交接卡：每项目只留最近 N 张
+    seen: dict[str, int] = {}
+    for r in repo.scan(kinds=["handoff"], status="superseded"):
+        seen[r.namespace] = seen.get(r.namespace, 0) + 1
+        if seen[r.namespace] > policy["keep_handoffs"]:
+            add(r, "handoff-history",
+                f"第 {seen[r.namespace]} 张失效卡（保留最近 {policy['keep_handoffs']} 张）")
 
-        # 3) 失效 checkpoint：每项目只留最近 N 条
-        rows = conn.execute(
-            "SELECT * FROM memories WHERE kind='checkpoint' AND status='superseded' "
-            "ORDER BY project, id DESC"
-        ).fetchall()
-        seen = {}
-        for r in rows:
-            seen[r["project"]] = seen.get(r["project"], 0) + 1
-            if seen[r["project"]] > policy["keep_superseded"]:
-                add(r, "checkpoint-history", f"第 {seen[r['project']]} 条失效状态")
+    # 3) 失效 checkpoint：每项目只留最近 N 条
+    seen = {}
+    for r in repo.scan(kinds=["checkpoint"], status="superseded"):
+        seen[r.namespace] = seen.get(r.namespace, 0) + 1
+        if seen[r.namespace] > policy["keep_superseded"]:
+            add(r, "checkpoint-history", f"第 {seen[r.namespace]} 条失效状态")
 
-        # 4) 过期草稿：写了没人确认
-        rows = conn.execute(
-            "SELECT * FROM memories WHERE kind='checkpoint' AND status='draft'"
-        ).fetchall()
-        for r in rows:
-            age = _age_days(r["created_at"]) or 0
-            if age >= policy["draft_days"]:
-                add(r, "draft-expired", f"{age:.0f} 天未确认的草稿")
+    # 4) 过期草稿：写了没人确认
+    for r in repo.scan(kinds=["checkpoint"], status="draft"):
+        age = _age_days(r.created_at) or 0
+        if age >= policy["draft_days"]:
+            add(r, "draft-expired", f"{age:.0f} 天未确认的草稿")
 
-        # 5) 提醒但不自动动：长期零命中的普通记忆
-        never_used = conn.execute(
-            """SELECT COUNT(*) c, SUM(length(content)) s FROM memories
-               WHERE status='active' AND kind NOT IN ('handoff','checkpoint','baseline')
-                 AND use_count = 0 AND created_at < ?""",
-            (_iso_days_ago(policy["hard_days"]),),
-        ).fetchone()
+    # 5) 提醒但不自动动：长期零命中的普通记忆
+    cutoff = _iso_days_ago(policy["hard_days"])
+    never = [
+        r for r in repo.scan(status="active")
+        if r.kind not in PROTECTED_KINDS and r.use_count == 0 and r.created_at < cutoff
+    ]
 
     # 去重（同一条可能同时命中多条规则，保留第一条）
     uniq: dict[int, dict[str, Any]] = {}
@@ -146,8 +138,8 @@ def plan(store, **overrides: Any) -> dict[str, Any]:
             "byReason": by_reason,
         },
         "neverUsedOld": {
-            "count": int(never_used["c"] or 0),
-            "chars": int(never_used["s"] or 0),
+            "count": len(never),
+            "chars": sum(len(r.content or "") for r in never),
             "note": f"{policy['hard_days']} 天以上、一次没被检索命中过的普通记忆（只提醒，不自动归档）",
         },
     }

@@ -26,9 +26,9 @@ SRC = ROOT / "src"
 CORE = ("paths", "schema", "card", "embed", "engine")
 
 # 已知的越界依赖：(from, to) -> 为什么留着、什么时候修
-BASELINE: dict[tuple[str, str], str] = {
-    ("store", "pages"): "store.__init__ 里替页面层建表；P2 收编时应由调用方装配",
-}
+# 目前是空的——P2 把 store→pages 收掉之后，边界是干净的。
+# 保留这个机制：将来真的需要临时例外时，写在这里并注明出口。
+BASELINE: dict[tuple[str, str], str] = {}
 
 
 def imports_of(path: Path, known: set[str]) -> set[str]:
