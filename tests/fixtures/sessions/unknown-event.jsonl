@@ -1,0 +1,5 @@
+{"type":"session","id":"sess-unknown","cwd":"/work/demo","createdAt":1761900000004}
+{"type":"future/event","seq":1,"data":{"payload":{"nested":true}}}
+this line is not valid json
+{"type":"user/message","seq":2,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"未知事件不应打断解析"}]}}
+{"type":"assistant/message","seq":3,"data":{"usage":{"inputTokens":5,"cacheReadTokens":5},"message":{"content":[{"type":"text","text":"ok"}]}}}

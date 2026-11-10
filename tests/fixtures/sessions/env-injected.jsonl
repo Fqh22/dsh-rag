@@ -1,0 +1,5 @@
+{"type":"session","id":"sess-env","cwd":"/work/demo","createdAt":1761900000003}
+{"type":"user/message","seq":1,"data":{"source":{"kind":"agent-instructions"},"content":[{"type":"text","text":"你是助手"}]}}
+{"type":"user/message","seq":2,"data":{"source":{"kind":"skill-catalog"},"content":[{"type":"text","text":"技能列表"}]}}
+{"type":"user/message","seq":3,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"真正的问题"}]}}
+{"type":"assistant/message","seq":4,"data":{"usage":{"inputTokens":10,"cacheReadTokens":10},"message":{"content":[{"type":"text","text":"回答"}]}}}

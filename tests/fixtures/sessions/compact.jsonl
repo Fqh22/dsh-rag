@@ -1,0 +1,4 @@
+{"type":"session","id":"sess-compact","cwd":"/work/demo","createdAt":1761900000001}
+{"type":"user/message","seq":1,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"重构存储层"}]}}
+{"type":"user/message","seq":2,"data":{"source":{"kind":"compact-checkpoint"},"content":[{"type":"text","text":"This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context.\n\n之前拆了 schema，保留了旧表。"}]}}
+{"type":"assistant/message","seq":3,"data":{"usage":{"inputTokens":50,"cacheReadTokens":1000},"message":{"content":[{"type":"text","text":"继续。"}]}}}

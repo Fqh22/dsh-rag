@@ -1,0 +1,6 @@
+{"type":"session","id":"sess-minimal","cwd":"/work/demo","createdAt":1761900000000,"origin":"main"}
+{"type":"session/title","data":{"title":"最小会话"}}
+{"type":"user/message","seq":1,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"帮我看看 README"}]}}
+{"type":"assistant/message","seq":2,"data":{"usage":{"inputTokens":100,"cacheReadTokens":900},"message":{"content":[{"type":"text","text":"好的，我先读一下。"}]}}}
+{"type":"tool/call","seq":3,"data":{"name":"read","arguments":"{\"file_path\":\"/work/demo/README.md\"}"}}
+{"type":"tool/call","seq":4,"data":{"name":"read","arguments":"{\"file_path\":\"/work/demo/README.md\"}"}}
