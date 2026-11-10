@@ -13,6 +13,32 @@
 
 ---
 
+## 快速开始（5 分钟）
+
+```powershell
+git clone https://github.com/Fqh22/dsh-rag.git dsh-rag
+cd dsh-rag
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+```
+
+`install.ps1` 做三件事：把 MCP server 写进当前 profile 的 `cordis.patch.yml`
+（`- insert:` 包裹这个坑已经替你处理）、把面板插件挂进 `package.json`、用 DSH 自带的 pnpm 装好。
+
+- **幂等**：重复跑不会重复添加；改动前自动备份成 `*.bak-<时间戳>`
+- `-DryRun` 只看计划不动文件；`-Uninstall` 撤销；`-SkipPanel` 只配 MCP；`-Profile web` 配 Web 端
+
+然后**重启 DSH**，验证两件事：
+
+1. 工具表里出现 `mcp__rag__*`
+2. 界面右下角出现记忆面板按钮
+
+> 没装 `.venv` 也能跑脚本，它会在自检里提醒你先装依赖。
+> 不想用脚本的手动步骤见下面「环境与安装」和「接入 DSH」——内容一样，只是要自己改两个文件。
+
+---
+
 ## 它解决什么
 
 | 痛点 | 这里的对策 |
@@ -191,6 +217,9 @@ python -m venv .venv
 
 > 国内网络建议用清华镜像；用官方源把 `-i` 去掉即可。
 
+装完依赖后跑 `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`，
+一条命令完成 MCP 配置 + 面板插件（见上面的「快速开始」）。下面两节是它做的细节，想手动来可以对照。
+
 **环境变量**（都有合理默认值，通常只需要第一个）：
 
 | 变量 | 作用 | 默认 |
@@ -201,7 +230,7 @@ python -m venv .venv
 | `DSH_RAG_HANDOFFS_ROOT` | 没有项目目录时，交接卡 md 的导出位置 | `data/handoffs` |
 | `DSH_RAG_EMBED` | 向量后端：`zhipu` / `local` / `off` | `zhipu` |
 | `DSH_RAG_SCAN_SECONDS` | 归档守护的扫描间隔（秒） | `300` |
-| `DSH_RAG_ROOT` | 面板插件去哪里找 Python 仓库（npm 安装时必设） | 自动探测 |
+| `DSH_RAG_ROOT` | 面板插件去哪里找 Python 仓库 | 自动探测：插件上级 → `~/Documents/Projects/dsh-rag` → `~/dsh-rag` |
 | `DSH_RAG_PYTHON` | 面板调 CLI 时用的 Python 解释器 | 项目的 `.venv`，找不到就用 `python` |
 
 向量化默认走**智谱 embedding-3**（`https://open.bigmodel.cn/api/paas/v4/embeddings`，1024 维），
@@ -356,6 +385,8 @@ plugin/
 ```
 
 **装配方式**（以 desktop profile 为例）：
+
+> 跑过 `scripts/install.ps1` 的话，这一节可以跳过——它做的就是这个（默认走方式 B 的链接，改插件代码刷新即生效）。
 
 方式 A —— 从 npm 装（使用者）：
 
