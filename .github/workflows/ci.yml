@@ -31,6 +31,7 @@ jobs:
           python scripts/selftest_session_source.py
           python scripts/selftest_session_markdown.py
           python scripts/selftest_repository.py
+          python scripts/selftest_cleanup_rules.py
           python scripts/selftest_replay.py
           python scripts/selftest_pack.py
           python scripts/selftest_v5.py

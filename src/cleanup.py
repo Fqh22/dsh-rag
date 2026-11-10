@@ -54,17 +54,23 @@ def _has_checkpoint(conn: sqlite3.Connection, project: str) -> bool:
     return bool(r)
 
 
-def plan(store, **overrides: Any) -> dict[str, Any]:
+def plan(store=None, *, repo=None, **overrides: Any) -> dict[str, Any]:
     """算出候选，不写库。返回 {candidates, stats}。
 
-    只读路径走 Repository 协议（P2）：不再直接碰 `store._conn`，这样生命周期规则
-    可以脱离 SQLite 复用。写入路径（apply / purge）仍在存储层内部完成。
+    只读路径走 Repository 协议（P2）：不再直接碰 `store._conn`，生命周期规则
+    因此可以脱离 SQLite 复用——`repo=` 直接传任何符合协议的实现即可，
+    规则测试（scripts/selftest_cleanup_rules.py）就是这么做的。
+    写入路径（apply / purge）仍在存储层内部完成。
     """
     from adapters.repository import for_store
 
+    if repo is None:
+        if store is None:
+            raise TypeError("plan() 需要 store 或 repo 之一")
+        repo = for_store(store)
+
     policy = dict(DEFAULT_POLICY)
     policy.update({k: v for k, v in overrides.items() if v is not None})
-    repo = for_store(store)
     candidates: list[dict[str, Any]] = []
 
     def add(rec, reason: str, detail: str) -> None:
