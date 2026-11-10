@@ -613,6 +613,23 @@ class Store:
             self._conn.commit()
             return int(cur.rowcount or 0)
 
+    def supersede_kind(self, project: str, kind: str, keep_id: int | None = None) -> int:
+        """把某项目下该 kind 的生效记录置为 superseded（keep_id 除外）。返回条数。
+
+        与 supersede_session_memories 的区别：那个按 session_id 专用于会话摘要，
+        这个是通用语义，供 Repository 适配器使用（P2）。
+        """
+        project = self.normalize_project(project)
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE memories SET status='superseded', updated_at=? "
+                "WHERE project=? AND kind=? AND status='active' "
+                "AND (? IS NULL OR id != ?)",
+                (now_iso(), project, kind, keep_id, keep_id),
+            )
+            self._conn.commit()
+            return int(cur.rowcount or 0)
+
     def upsert_session(
         self,
         session_id: str,

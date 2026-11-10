@@ -1,0 +1,150 @@
+{
+ "after_archive": {
+  "active": 4,
+  "recall_hits": 2
+ },
+ "after_restore": {
+  "recall_hits": 2,
+  "restored": true
+ },
+ "checkpoint": {
+  "baseline": "技术栈：Python + SQLite",
+  "done": [
+   "存储层",
+   "FTS"
+  ],
+  "goal": "验证重放",
+  "next": [
+   "向量检索"
+  ]
+ },
+ "cleanup_reasons": [],
+ "pack": {
+  "checkpoint": true,
+  "estTokens": 200,
+  "factCount": 3,
+  "hasHandoff": true,
+  "sections": {
+   "baseline": 35,
+   "card": 64,
+   "facts": 160,
+   "next": 0
+  },
+  "text": "# 项目上下文包 · demo\n<!-- 由 dsh-rag 生成；基线不变则这一段字节不变，可跨会话复用前缀缓存 -->\n## 0 · 基线（稳定）\n技术栈：Python + SQLite\n\n## 1 · 长期事实（按时间顺序，不改写）\n[decision] 选 SQLite\n不引入向量数据库，用 SQLite + numpy。\n\n[fact] 项目位置\n项目都在 ~/Documents/Projects 下。\n\n[pitfall] FTS5 不切中文\nunicode61 不切中文，必须 bigram。\n\n## 2 · 当前状态\n### 当前目标\n验证重放\n\n### 已完成\n- 存储层\n- FTS\n\n### 下一步\n- 向量检索\n",
+  "truncated": [],
+  "version": "9791925c"
+ },
+ "recall:FTS": [
+  {
+   "id": 5,
+   "kind": "checkpoint",
+   "score": 0.01639,
+   "title": "项目状态"
+  },
+  {
+   "id": 6,
+   "kind": "handoff",
+   "score": 0.01613,
+   "title": "项目交接卡"
+  }
+ ],
+ "recall:向量数据库": [
+  {
+   "id": 1,
+   "kind": "decision",
+   "score": 0.01639,
+   "title": "选 SQLite"
+  },
+  {
+   "id": 5,
+   "kind": "checkpoint",
+   "score": 0.01613,
+   "title": "项目状态"
+  },
+  {
+   "id": 6,
+   "kind": "handoff",
+   "score": 0.01587,
+   "title": "项目交接卡"
+  }
+ ],
+ "recall:项目位置": [
+  {
+   "id": 2,
+   "kind": "fact",
+   "score": 0.01639,
+   "title": "项目位置"
+  },
+  {
+   "id": 5,
+   "kind": "checkpoint",
+   "score": 0.01587,
+   "title": "项目状态"
+  },
+  {
+   "id": 6,
+   "kind": "handoff",
+   "score": 0.01562,
+   "title": "项目交接卡"
+  }
+ ],
+ "recent": [
+  {
+   "id": 6,
+   "kind": "handoff",
+   "title": "项目交接卡"
+  },
+  {
+   "id": 5,
+   "kind": "checkpoint",
+   "title": "项目状态"
+  },
+  {
+   "id": 3,
+   "kind": "pitfall",
+   "title": "FTS5 不切中文"
+  },
+  {
+   "id": 2,
+   "kind": "fact",
+   "title": "项目位置"
+  },
+  {
+   "id": 1,
+   "kind": "decision",
+   "title": "选 SQLite"
+  }
+ ],
+ "remember:decision": {
+  "created": true,
+  "id": 1
+ },
+ "remember:dup": {
+  "created": false,
+  "same_id": true
+ },
+ "remember:fact": {
+  "created": true,
+  "id": 2
+ },
+ "remember:pitfall": {
+  "created": true,
+  "id": 3
+ },
+ "stats": {
+  "active": 5,
+  "kinds": {
+   "checkpoint": 1,
+   "decision": 1,
+   "fact": 1,
+   "handoff": 1,
+   "pitfall": 1
+  },
+  "missing_vectors": 5,
+  "projects": 1,
+  "schema_version": 6,
+  "sessions": 0,
+  "total": 6,
+  "vectors": 0
+ }
+}

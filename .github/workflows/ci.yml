@@ -29,6 +29,8 @@ jobs:
         run: |
           python scripts/selftest_contracts.py
           python scripts/selftest_session_source.py
+          python scripts/selftest_repository.py
+          python scripts/selftest_replay.py
           python scripts/selftest_pack.py
           python scripts/selftest_v5.py
           python scripts/selftest_v6.py
