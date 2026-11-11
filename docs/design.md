@@ -1,6 +1,8 @@
 # 设计与数据结构
 
 
+## 目录结构
+
 ```
 dsh-rag/
 ├─ src/
@@ -36,6 +38,8 @@ dsh-rag/
 ├─ logs/archive.log · logs/mcp.log
 └─ requirements.txt
 ```
+
+## 数据模型（v6）
 
 六张表，每张只做一件事：
 
@@ -84,7 +88,7 @@ dsh-rag/
 
 ### 交接卡 / 结构化状态 / 上下文包
 
-> 完整格式规范（段序、裁剪顺序、确定性要求、消费方约定）见 [pack-format.md](pack-format.md)。
+> 完整格式规范（段序、裁剪顺序、确定性要求、消费方约定）见 [docs/pack-format.md](pack-format.md)。
 
 三者是一条流水线，不是三个东西：
 

@@ -1,6 +1,8 @@
 # 日常运维
 
 
+## 日常工作流
+
 **新会话开场**（三句话就够让模型自己去做）：
 
 > 先 `handoff_pack` 读一下当前项目的上下文包。
@@ -41,6 +43,8 @@ powershell -ExecutionPolicy Bypass -File "<repo>\scripts\install-autostart.ps1"
 - 每个会话只尝试一次；推断不出项目就什么都不做
 - 关闭：环境变量 `DSH_RAG_AUTO_INJECT=off`；每次决定记在 `logs/auto-inject.log`
 - 为什么不在会话创建时注入：那一刻还不知道是哪个项目，得等用户开口
+
+## 信息生命周期：什么时候该清理
 
 记忆不是越多越好。**会话摘要是唯一快速贬值的东西**——它是"当时聊过什么"的记录，
 一旦项目有了 checkpoint，它就不再支撑"现在是什么状态"。留着只会稀释检索、撑大 pack。
@@ -101,6 +105,8 @@ python src/cli.py cleanup --purge         # 硬删 archived 超过 180 天的（
 > 结论：这个项目现在**不需要激进清理**——数据才两天。真正会堆积的是半年后的
 > 会话摘要，而规则已经就位，到时候一条命令的事。
 
+## 运维
+
 ```powershell
 # 自测（互相独立）
 .venv\Scripts\python.exe scripts\selftest_store.py
@@ -131,6 +137,8 @@ Copy-Item data\memory.db data\backup\memory-$(Get-Date -f yyyyMMdd-HHmm).db
 日志：`logs\archive.log`、`logs\mcp.log`、`logs\auto-inject.log`（开场注入的每次决定）。
 守护进程若起不来，先手动跑 `python scripts\watch_archive.py` 看报错。
 
+## 从 v0.4 / v0.5 升级
+
 迁移是**自动**的：任何进程打开旧库时，`schema.ensure()` 会把结构升到当前版本。
 
 - **v4 → v5**：建新表、搬数据、重建 FTS；旧表**不删**，重命名成
@@ -142,6 +150,8 @@ Copy-Item data\memory.db data\backup\memory-$(Get-Date -f yyyyMMdd-HHmm).db
 
 回滚：停 DSH → 用 `data/backup/memory-v4-*.db` 覆盖 `data/memory.db`（连同 `-wal`/`-shm` 一起删）
 → 把 `src/` 恢复到对应版本 → 重启。
+
+## 回滚（整体）
 
 1. **只停记忆库**：把 `cordis.patch.yml` 里的 `dsh-rag` 段删掉，重启 DSH。
    原文件备份在同目录 `cordis.patch.yml.bak-20261101-1245`。

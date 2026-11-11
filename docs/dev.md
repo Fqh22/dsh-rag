@@ -1,6 +1,8 @@
 # 开发、测试与贡献
 
 
+## 开发与测试
+
 全部自测都用临时库 + 临时目录，不会碰 `data/memory.db`：
 
 ```powershell
@@ -22,6 +24,8 @@ node scripts\selftest_plugin.mjs
 
 改完 `src/*.py` 之后**必须重启 DSH**：MCP server 是常驻进程，盘上的新代码它不会自己加载。
 CLI 和脚本没有这个限制。
+
+## 贡献
 
 欢迎 issue / PR。有两点约定：
 

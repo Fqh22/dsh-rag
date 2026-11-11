@@ -12,17 +12,88 @@
 """
 from __future__ import annotations
 
+import os
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import schema
 
 SESSIONS_ROOT = Path.home() / ".dsh" / "sessions"
+LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
+AUTO_INJECT_LOG = LOG_DIR / "auto-inject.log"
 
 
 def _check(name: str, level: str, detail: str) -> dict[str, Any]:
     return {"name": name, "level": level, "detail": detail}
+
+
+def _parse_log_ts(line: str) -> datetime | None:
+    """日志行形如 `[2026-11-10T18:24:46.123Z] matched ...`。"""
+    if not line.startswith("[") or "]" not in line:
+        return None
+    raw = line[1:line.index("]")].replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _check_auto_inject(store) -> dict[str, Any]:
+    """开场自动注入依赖 DSH 私有 API，失败是**静默**的——只能靠日志判断。
+
+    判据不是"多久没注入"（用户可能一周没开会话），而是
+    「最近有会话活动，但同期没有成功注入」——那才是链路断了。
+    """
+    disabled = (os.environ.get("DSH_RAG_AUTO_INJECT") or "").strip().lower() in ("off", "0", "false")
+    if disabled:
+        return _check("开场自动注入", "ok", "已关闭（DSH_RAG_AUTO_INJECT=off）")
+
+    if not AUTO_INJECT_LOG.is_file():
+        return _check("开场自动注入", "warn",
+                      "没有 logs/auto-inject.log：插件没加载，或这台机器还没开过会话")
+
+    try:
+        lines = AUTO_INJECT_LOG.read_text(encoding="utf-8", errors="replace").splitlines()[-800:]
+    except OSError as exc:
+        return _check("开场自动注入", "warn", f"日志读不出来：{exc}")
+
+    last_ok: datetime | None = None
+    for line in reversed(lines):
+        # 插件成功时写的是 `injected project=...`；`hook unmatched` 是没命中项目
+        if "injected" in line or ("matched" in line and "unmatched" not in line):
+            last_ok = _parse_log_ts(line)
+            if last_ok:
+                break
+    if last_ok is None:
+        return _check("开场自动注入", "warn",
+                      "日志里一次成功注入都没有：检查插件是否启用、logs/auto-inject.log")
+
+    now = datetime.now(last_ok.tzinfo)
+    age_h = (now - last_ok).total_seconds() / 3600
+    human = f"{age_h:.0f} 小时前" if age_h < 48 else f"{age_h / 24:.0f} 天前"
+
+    # 有比注入更新的会话 → 说明后来开过会话却没注入成功
+    try:
+        sessions = store.sessions(limit=1)
+        newest_started = sessions[0].get("started_at") if sessions else None
+        if newest_started:
+            started = datetime.fromisoformat(newest_started)
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=last_ok.tzinfo)
+            if started > last_ok and (started - last_ok).total_seconds() > 86400:
+                return _check(
+                    "开场自动注入", "warn",
+                    f"最近一次成功注入是{human}，但之后又有会话开始——"
+                    "链路可能已断（看 logs/auto-inject.log，或重启 DSH）",
+                )
+    except Exception:  # noqa: BLE001
+        pass
+
+    level = "warn" if age_h > 24 * 14 else "ok"
+    return _check("开场自动注入", level,
+                  f"最近一次成功注入 {human}" + ("（超过 14 天，确认是否还在用）" if level == "warn" else ""))
 
 
 def _human_bytes(n: int) -> str:
@@ -155,6 +226,14 @@ def run(store, session_probe: int = 6, verbose: bool = False) -> dict[str, Any]:
                 checks.append(_check("接力度量", "warn", "会话里没有 tool/call 事件，指标会是空的"))
     except Exception as exc:  # noqa: BLE001
         checks.append(_check("会话日志格式", "warn", f"检查失败：{type(exc).__name__}: {exc}"))
+
+    # ---------------------------------------------------------------- 注入链路
+    # 这一项的意义在 README 的「已知限制」里写得很清楚：DSH 升级就可能改私有 API，
+    # 而注入失败是静默的。没有这条检查，用户会一直以为记忆在工作。
+    try:
+        checks.append(_check_auto_inject(store))
+    except Exception as exc:  # noqa: BLE001
+        checks.append(_check("开场自动注入", "warn", f"检查失败：{type(exc).__name__}: {exc}"))
 
     # ---------------------------------------------------------------- 内容健康度
     # sync=False：体检不该顺手写 projects 表（overview 默认会 sync）

@@ -1,6 +1,8 @@
 # 安装与接入
 
 
+## 环境与安装
+
 需要 Python 3.10+（用系统 Python，或 DSH 自带的运行时都行）。
 
 ```powershell
@@ -96,6 +98,8 @@ python -m venv .venv
 > 所有连接 `PRAGMA busy_timeout=5000`、`doctor` 会报缺向量。
 > **改完 `store.py` / `schema.py` 必须重启 DSH**，否则跑的还是旧代码。
 
+## 接入 DSH
+
 在 `%USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml` 末尾（注意必须包在 `- insert:` 里，见下方「两个必须知道的坑」）：
 
 ```yaml
@@ -135,6 +139,23 @@ stdio 之外还有一个 **stateless HTTP** 通道，给不能起子进程的 ho
 - **没有鉴权**：传输层只负责收发，默认绑回环。要暴露到局域网，请自己套反向代理并加认证。
 - **不做 SSE**：会话管理与断线重连留给以后；现在只解决「远程/多 host 能连上」。
 - stdio 与 HTTP 共用同一份 `dispatch()`，不存在「一条通道能跑、另一条少个分支」。
+
+## 开机自启（归档守护）
+
+归档守护（`watch_archive.py`）是常驻进程。**不装也能用**——MCP server 每次启动会补一次归档，
+只是延迟到下次开 DSH；装自启才不会漏掉「连着几天不开机」期间结束的会话。
+
+| 平台 | 命令 |
+|---|---|
+| Windows | `powershell -ExecutionPolicy Bypass -File scripts\install-autostart.ps1` |
+| Linux（systemd user） | `bash scripts/install-autostart.sh` |
+| macOS（launchd） | `bash scripts/install-autostart.sh` |
+
+卸载：Windows 加 `-Uninstall`，POSIX 加 `--uninstall`；查状态：`--status`。
+
+> Linux 上如果希望「没登录也跑」，执行一次 `loginctl enable-linger $USER`；脚本会提醒。
+
+## 可视化面板（Web 插件）
 
 界面上有个右下角悬浮按钮（带条目数角标），点开是记忆库面板。
 
