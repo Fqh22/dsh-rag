@@ -79,7 +79,8 @@ def _check_auto_inject(store) -> dict[str, Any]:
         sessions = store.sessions(limit=1)
         newest_started = sessions[0].get("started_at") if sessions else None
         if newest_started:
-            started = datetime.fromisoformat(newest_started)
+            # Python 3.10 的 fromisoformat 不认 "Z"，统一成 +00:00
+            started = datetime.fromisoformat(str(newest_started).replace("Z", "+00:00"))
             if started.tzinfo is None:
                 started = started.replace(tzinfo=last_ok.tzinfo)
             if started > last_ok and (started - last_ok).total_seconds() > 86400:

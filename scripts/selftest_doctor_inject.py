@@ -43,7 +43,9 @@ class FakeStore:
 
 
 def iso(delta: timedelta) -> str:
-    return (datetime.now(timezone.utc) - delta).isoformat().replace("+00:00", "Z")
+    # 不用 "Z" 结尾：Python 3.10 的 fromisoformat 不认，3.11 才支持。
+    # CLI 在 3.10 和 3.12 两个版本上跑，这个差异必须避开。
+    return (datetime.now(timezone.utc) - delta).isoformat()
 
 
 def write_log(lines: list[str]) -> Path:
